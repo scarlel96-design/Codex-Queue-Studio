@@ -1,0 +1,48 @@
+name: Test and build
+on:
+  push:
+    branches: [main]
+  pull_request:
+  workflow_dispatch:
+permissions:
+  contents: read
+jobs:
+  test:
+    strategy:
+      fail-fast: false
+      matrix:
+        os: [ubuntu-latest, windows-latest]
+    runs-on: ${{ matrix.os }}
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-go@v5
+        with:
+          go-version-file: go.mod
+      - name: Validate and unit test
+        run: go test -race ./...
+        if: matrix.os == 'ubuntu-latest'
+      - name: Windows unit test
+        run: go test ./...
+        if: matrix.os == 'windows-latest'
+      - name: Static analysis
+        run: go vet ./...
+      - name: Compile native Windows GUI
+        if: matrix.os == 'windows-latest'
+        shell: pwsh
+        run: |
+          go build -ldflags "-H windowsgui -s -w" -o CodexQueueStudio.exe .
+          go build -ldflags "-H windowsgui -s -w" -o CodexQueueUpdater.exe ./cmd/updater
+          if (!(Test-Path CodexQueueStudio.exe)) { throw 'Native GUI build missing' }
+          if (!(Test-Path CodexQueueUpdater.exe)) { throw 'Updater build missing' }
+      - name: Upload Windows build artifact
+        if: matrix.os == 'windows-latest'
+        uses: actions/upload-artifact@v4
+        with:
+          name: CodexQueueStudio-Windows-x64-unsigned
+          path: |
+            CodexQueueStudio.exe
+            CodexQueueUpdater.exe
+            assets/icon.ico
+            README.md
+            docs/**
+          if-no-files-found: error

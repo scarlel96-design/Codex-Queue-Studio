@@ -1,0 +1,13 @@
+# Build outputs and local user data
+*.exe
+!testdata/*.exe
+*.test
+*.out
+coverage.*
+state.json
+instance.json
+engine/
+updates/
+*.backup
+*.tmp
+.DS_Store

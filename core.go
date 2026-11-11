@@ -1,0 +1,464 @@
+package main
+
+import (
+	"archive/zip"
+	"bytes"
+	"context"
+	"crypto/sha256"
+	"encoding/hex"
+	"encoding/json"
+	"errors"
+	"fmt"
+	"io"
+	"net/http"
+	"os"
+	"path/filepath"
+	"strconv"
+	"strings"
+	"sync"
+	"time"
+
+	"codexqueuestudiov3/internal"
+)
+
+const AppVersion = "3.0.0"
+const repoReleases = "https://api.github.com/repos/scarlel96-design/Codex-Queue-Studio/releases/latest"
+
+type Core struct {
+	root     string
+	store    *internal.Store
+	mu       sync.Mutex
+	sendMu   sync.Mutex
+	sessions []internal.Session
+	status   string
+	update   *UpdateInfo
+	stop     chan struct{}
+}
+type UpdateInfo struct {
+	Tag    string
+	URL    string
+	Digest string
+	Size   int64
+}
+type updateRelease struct {
+	Tag    string `json:"tag_name"`
+	Assets []struct {
+		Name   string `json:"name"`
+		URL    string `json:"browser_download_url"`
+		Digest string `json:"digest"`
+		Size   int64  `json:"size"`
+	} `json:"assets"`
+}
+
+func defaultHome() string {
+	if v := os.Getenv("CODEX_HOME"); v != "" {
+		return v
+	}
+	h, _ := os.UserHomeDir()
+	return filepath.Join(h, ".codex")
+}
+func appData() string {
+	if v := os.Getenv("LOCALAPPDATA"); v != "" {
+		return filepath.Join(v, "CodexQueueStudio")
+	}
+	h, _ := os.UserConfigDir()
+	return filepath.Join(h, "CodexQueueStudio")
+}
+func NewCore(root string) (*Core, error) {
+	store, err := internal.NewStore(filepath.Join(root, "state.json"), internal.Settings{CodexHome: defaultHome(), Theme: "system"})
+	if err != nil {
+		return nil, err
+	}
+	snapshot := store.Snapshot()
+	if snapshot.Version < 3 {
+		err = store.Update(func(st *internal.State) error {
+			for i := range st.Jobs {
+				j := &st.Jobs[i]
+				if j.State == "pending" && j.Mode != "app-server" {
+					j.State = "migration-required"
+					j.Error = "v2 예약의 전송 방식이 변경되었습니다. 사용자가 다시 승인해야 합니다."
+					internal.AddEvent(st, "migration", j.ID, "v2 CLI 예약을 안전하게 일시 중지했습니다")
+				}
+			}
+			st.Version = 3
+			return nil
+		})
+		if err != nil {
+			return nil, err
+		}
+	}
+	c := &Core{root: root, store: store, stop: make(chan struct{}), status: "준비 완료"}
+	return c, nil
+}
+func (c *Core) EnginePath() string {
+	if exe, err := os.Executable(); err == nil {
+		bundled := filepath.Join(filepath.Dir(exe), "engine", "codex.exe")
+		if st, err := os.Stat(bundled); err == nil && !st.IsDir() {
+			return bundled
+		}
+	}
+	return filepath.Join(c.root, "engine", "codex.exe")
+}
+func (c *Core) Server() internal.AppServer {
+	return internal.AppServer{Executable: c.EnginePath(), CodexHome: c.store.Snapshot().Settings.CodexHome}
+}
+func (c *Core) EnginePresent() bool {
+	st, err := os.Stat(c.EnginePath())
+	return err == nil && !st.IsDir()
+}
+func (c *Core) Status() string     { c.mu.Lock(); defer c.mu.Unlock(); return c.status }
+func (c *Core) setStatus(v string) { c.mu.Lock(); c.status = v; c.mu.Unlock() }
+func (c *Core) Snapshot() []internal.Session {
+	c.mu.Lock()
+	defer c.mu.Unlock()
+	return append([]internal.Session(nil), c.sessions...)
+}
+func (c *Core) RefreshLocal() error {
+	home := c.store.Snapshot().Settings.CodexHome
+	found, err := internal.ScanSessions(home, 30000)
+	if err != nil {
+		c.setStatus("로컬 세션 조회 실패: " + err.Error())
+		return err
+	}
+	c.mu.Lock()
+	c.sessions = found
+	c.mu.Unlock()
+	c.setStatus(fmt.Sprintf("로컬 세션 %d개 조회", len(found)))
+	return nil
+}
+func (c *Core) MergeRemote(ctx context.Context) error {
+	if !c.EnginePresent() {
+		return nil
+	}
+	rpcCtx, cancel := context.WithTimeout(ctx, 15*time.Second)
+	defer cancel()
+	remote, err := c.Server().List(rpcCtx, 1500)
+	if err != nil {
+		c.setStatus("로컬 목록 사용 중 · App Server 조회 실패: " + err.Error())
+		return err
+	}
+	c.mu.Lock()
+	c.sessions = internal.MergeSessions(c.sessions, remote)
+	count := len(c.sessions)
+	c.mu.Unlock()
+	c.setStatus(fmt.Sprintf("통합 세션 %d개 조회", count))
+	return nil
+}
+func (c *Core) Refresh(ctx context.Context) error {
+	if err := c.RefreshLocal(); err != nil {
+		return err
+	}
+	_ = c.MergeRemote(ctx) // Keep local sessions available if server authentication fails.
+	return nil
+}
+func (c *Core) Schedule(id, title, message string, when time.Time) (string, error) {
+	if !internal.ValidSessionID(id) {
+		return "", errors.New("세션을 선택하세요")
+	}
+	if strings.TrimSpace(message) == "" || len([]rune(message)) > 12000 {
+		return "", errors.New("메시지 길이는 1~12,000자여야 합니다")
+	}
+	if when.Before(time.Now().Add(-2 * time.Second)) {
+		return "", errors.New("과거 시각으로 예약할 수 없습니다")
+	}
+	exists := false
+	for _, s := range c.Snapshot() {
+		if s.ID == id && !s.Archived {
+			exists = true
+			break
+		}
+	}
+	if !exists {
+		return "", errors.New("사용할 수 없는 세션입니다. 먼저 세션 목록을 새로고침하세요")
+	}
+	cipher, err := internal.SealMessage(message)
+	if err != nil {
+		return "", err
+	}
+	idNew := internal.NewID()
+	now := time.Now()
+	job := internal.Job{ID: idNew, SessionID: id, SessionTitle: title, Cipher: cipher, When: when, CreatedAt: now, UpdatedAt: now, Mode: "app-server", State: "pending"}
+	err = c.store.Update(func(st *internal.State) error {
+		st.Jobs = append(st.Jobs, job)
+		internal.AddEvent(st, "created", idNew, "메시지 예약을 저장했습니다")
+		return nil
+	})
+	return idNew, err
+}
+func (c *Core) Cancel(id string) error {
+	return c.store.Update(func(st *internal.State) error {
+		for i := range st.Jobs {
+			if st.Jobs[i].ID == id {
+				if st.Jobs[i].State != "pending" {
+					return errors.New("대기 상태에서만 취소할 수 있습니다")
+				}
+				st.Jobs[i].State = "canceled"
+				st.Jobs[i].UpdatedAt = time.Now()
+				internal.AddEvent(st, "canceled", id, "예약 취소")
+				return nil
+			}
+		}
+		return errors.New("예약이 없습니다")
+	})
+}
+func (c *Core) Reactivate(id string) error {
+	return c.store.Update(func(st *internal.State) error {
+		for i := range st.Jobs {
+			j := &st.Jobs[i]
+			if j.ID != id {
+				continue
+			}
+			if j.State != "migration-required" && j.State != "failed" && j.State != "uncertain" {
+				return errors.New("재예약할 수 없는 상태입니다")
+			}
+			j.Mode = "app-server"
+			j.State = "pending"
+			if !j.When.After(time.Now()) {
+				j.When = time.Now().Add(5 * time.Second)
+			}
+			j.UpdatedAt = time.Now()
+			j.Error = ""
+			j.Detail = ""
+			internal.AddEvent(st, "reactivated", id, "사용자가 전송 방식과 재예약을 확인했습니다")
+			return nil
+		}
+		return errors.New("예약이 없습니다")
+	})
+}
+func (c *Core) Pending() []internal.JobPublic {
+	return internal.SortPublicJobs(c.store.Snapshot().Jobs)
+}
+func (c *Core) SendDue() {
+	if !c.sendMu.TryLock() {
+		return
+	}
+	defer c.sendMu.Unlock()
+	for _, job := range c.store.Snapshot().Jobs {
+		if job.State != "pending" || job.When.After(time.Now()) {
+			continue
+		}
+		id := job.ID
+		err := c.store.Update(func(st *internal.State) error {
+			for i := range st.Jobs {
+				if st.Jobs[i].ID == id && st.Jobs[i].State == "pending" {
+					st.Jobs[i].State = "sending"
+					st.Jobs[i].UpdatedAt = time.Now()
+					internal.AddEvent(st, "sending", id, "Codex App Server에 실행 요청")
+					return nil
+				}
+			}
+			return errors.New("이미 처리된 작업")
+		})
+		if err != nil {
+			continue
+		}
+		message, e := internal.OpenMessage(job.Cipher)
+		detail := ""
+		if e == nil {
+			if !c.EnginePresent() {
+				e = errors.New("내장 Codex 엔진이 설치되지 않았습니다. 설정에서 엔진을 설치하세요")
+			} else {
+				ctx, cancel := context.WithTimeout(context.Background(), 30*time.Minute)
+				detail, e = c.Server().Send(ctx, job.SessionID, message)
+				cancel()
+			}
+		}
+		state := "completed"
+		if e != nil {
+			state = "failed"
+			if strings.Contains(detail, "completion unknown") {
+				state = "uncertain"
+			}
+		}
+		reason := ""
+		if e != nil {
+			reason = e.Error()
+		}
+		_ = c.store.Update(func(st *internal.State) error {
+			for i := range st.Jobs {
+				if st.Jobs[i].ID == id && st.Jobs[i].State == "sending" {
+					st.Jobs[i].State = state
+					st.Jobs[i].Error = reason
+					st.Jobs[i].Detail = detail
+					st.Jobs[i].UpdatedAt = time.Now()
+					internal.AddEvent(st, state, id, reason)
+					break
+				}
+			}
+			return nil
+		})
+		c.setStatus("예약 " + id[:8] + " : " + state)
+	}
+}
+func (c *Core) Run() {
+	go func() {
+		t := time.NewTicker(2 * time.Second)
+		defer t.Stop()
+		c.SendDue()
+		for {
+			select {
+			case <-t.C:
+				c.SendDue()
+			case <-c.stop:
+				return
+			}
+		}
+	}()
+}
+func (c *Core) Stop() { close(c.stop) }
+func (c *Core) InstallEngine(ctx context.Context) error {
+	if c.EnginePresent() {
+		return errors.New("Codex 실행 엔진이 이미 설치되어 있습니다")
+	}
+	c.setStatus("공식 Codex 엔진 다운로드 및 무결성 검사 중")
+	tag, err := internal.InstallEngine(ctx, filepath.Join(c.root, "engine"))
+	if err != nil {
+		c.setStatus("엔진 설치 실패: " + err.Error())
+		return err
+	}
+	c.setStatus("Codex 엔진 설치 완료: " + tag)
+	return nil
+}
+func newerTag(remote, current string) bool {
+	parse := func(v string) ([3]int, bool) {
+		var out [3]int
+		v = strings.TrimPrefix(v, "v")
+		parts := strings.Split(v, ".")
+		if len(parts) != 3 {
+			return out, false
+		}
+		for i, part := range parts {
+			n, err := strconv.Atoi(part)
+			if err != nil || n < 0 || n > 999999 {
+				return out, false
+			}
+			out[i] = n
+		}
+		return out, true
+	}
+	a, ok := parse(remote)
+	if !ok {
+		return false
+	}
+	b, ok := parse(current)
+	if !ok {
+		return false
+	}
+	for i := 0; i < 3; i++ {
+		if a[i] != b[i] {
+			return a[i] > b[i]
+		}
+	}
+	return false
+}
+
+func (c *Core) CheckUpdate(ctx context.Context) (*UpdateInfo, error) {
+	req, err := http.NewRequestWithContext(ctx, "GET", repoReleases, nil)
+	if err != nil {
+		return nil, err
+	}
+	req.Header.Set("User-Agent", "CodexQueueStudio/3.0")
+	resp, err := internal.HTTPClient().Do(req)
+	if err != nil {
+		return nil, err
+	}
+	defer resp.Body.Close()
+	if resp.StatusCode == 404 {
+		return nil, nil
+	}
+	if resp.StatusCode != 200 {
+		return nil, fmt.Errorf("GitHub 업데이트 조회 HTTP %d", resp.StatusCode)
+	}
+	var rel updateRelease
+	if err = json.NewDecoder(io.LimitReader(resp.Body, 2<<20)).Decode(&rel); err != nil {
+		return nil, err
+	}
+	if !newerTag(rel.Tag, AppVersion) {
+		return nil, nil
+	}
+	for _, a := range rel.Assets {
+		if a.Name == "CodexQueueStudio-Windows-x64.zip" {
+			if a.Size <= 0 || a.Size > 60<<20 || !strings.HasPrefix(a.Digest, "sha256:") || len(a.Digest) != 71 || !strings.HasPrefix(a.URL, "https://github.com/scarlel96-design/Codex-Queue-Studio/releases/download/") {
+				return nil, errors.New("업데이트 릴리스의 무결성 정보가 유효하지 않습니다")
+			}
+			info := &UpdateInfo{Tag: rel.Tag, URL: a.URL, Digest: strings.TrimPrefix(a.Digest, "sha256:"), Size: a.Size}
+			c.mu.Lock()
+			c.update = info
+			c.mu.Unlock()
+			return info, nil
+		}
+	}
+	return nil, nil
+}
+func (c *Core) UpdateAvailable() *UpdateInfo { c.mu.Lock(); defer c.mu.Unlock(); return c.update }
+func (c *Core) DownloadUpdate(ctx context.Context, upd UpdateInfo) (string, error) {
+	req, err := http.NewRequestWithContext(ctx, "GET", upd.URL, nil)
+	if err != nil {
+		return "", err
+	}
+	resp, err := internal.HTTPClient().Do(req)
+	if err != nil {
+		return "", err
+	}
+	defer resp.Body.Close()
+	if resp.StatusCode != 200 {
+		return "", fmt.Errorf("업데이트 다운로드 HTTP %d", resp.StatusCode)
+	}
+	raw, err := io.ReadAll(io.LimitReader(resp.Body, (60<<20)+1))
+	if err != nil {
+		return "", err
+	}
+	if int64(len(raw)) != upd.Size {
+		return "", errors.New("업데이트 크기 불일치")
+	}
+	sum := sha256.Sum256(raw)
+	if !strings.EqualFold(hex.EncodeToString(sum[:]), upd.Digest) {
+		return "", errors.New("업데이트 SHA256 검증 실패")
+	}
+	archive, err := zip.NewReader(bytesReader(raw), int64(len(raw)))
+	if err != nil {
+		return "", err
+	}
+	var file *zip.File
+	for _, f := range archive.File {
+		if f.Name == "CodexQueueStudio.exe" && f.UncompressedSize64 < 50<<20 {
+			file = f
+			break
+		}
+	}
+	if file == nil {
+		return "", errors.New("업데이트 패키지에 실행 파일이 없습니다")
+	}
+	r, err := file.Open()
+	if err != nil {
+		return "", err
+	}
+	defer r.Close()
+	dir := filepath.Join(c.root, "updates")
+	if err = os.MkdirAll(dir, 0700); err != nil {
+		return "", err
+	}
+	target := filepath.Join(dir, "CodexQueueStudio.new.exe")
+	tmp := target + ".tmp"
+	h, err := os.Create(tmp)
+	if err != nil {
+		return "", err
+	}
+	_, err = io.Copy(h, io.LimitReader(r, 50<<20))
+	if err != nil {
+		h.Close()
+		os.Remove(tmp)
+		return "", err
+	}
+	if err = h.Sync(); err != nil {
+		h.Close()
+		os.Remove(tmp)
+		return "", err
+	}
+	h.Close()
+	if err = os.Rename(tmp, target); err != nil {
+		return "", err
+	}
+	return target, nil
+}
+func bytesReader(b []byte) *bytes.Reader { return bytes.NewReader(b) }
