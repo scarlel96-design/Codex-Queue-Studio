@@ -3,6 +3,8 @@ from pathlib import Path
 import struct
 
 HERE=Path(__file__).resolve().parent
+import subprocess,sys
+subprocess.check_call([sys.executable,str(HERE/'make_icon.py')])
 ico=(HERE/'icon.ico').read_bytes()
 reserved,typ,count=struct.unpack_from('<HHH',ico,0)
 assert reserved==0 and typ==1

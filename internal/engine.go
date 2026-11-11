@@ -356,7 +356,7 @@ func (s AppServer) List(ctx context.Context, limit int) ([]Session, error) {
 	var result []Session
 	var cursor *string
 	for page := 0; page < 20 && len(result) < limit; page++ {
-		args := map[string]any{"limit": 100}
+		args := map[string]any{"limit": 100, "sourceKinds": []string{"cli", "vscode", "exec", "appServer"}}
 		if cursor != nil {
 			args["cursor"] = *cursor
 		}
@@ -376,6 +376,8 @@ func (s AppServer) List(ctx context.Context, limit int) ([]Session, error) {
 				CWD       string          `json:"cwd"`
 				UpdatedAt int64           `json:"updatedAt"`
 				Source    json.RawMessage `json:"source"`
+				Originator string `json:"originator"`
+				ParentThreadID *string `json:"parentThreadId"`
 			} `json:"data"`
 			NextCursor *string `json:"nextCursor"`
 		}
@@ -386,16 +388,21 @@ func (s AppServer) List(ctx context.Context, limit int) ([]Session, error) {
 			if !ValidSessionID(t.ID) {
 				continue
 			}
+			parent:=""
+			if t.ParentThreadID!=nil {parent=*t.ParentThreadID}
+			label,ok:=classifySource(t.Source,t.Originator,parent)
+			if !ok {continue}
 			name := t.Preview
 			source := "preview"
 			if t.Name != nil && !genericTitle(*t.Name) {
-				name = *t.Name
+				name = strings.TrimSpace(*t.Name)
 				source = "app-server"
 			} else if genericTitle(name) {
-				name = "제목 없음"
+				name = "제목 미지정"
+				source = "unresolved"
 			}
 			tm := time.Unix(t.UpdatedAt, 0)
-			result = append(result, Session{ID: t.ID, Title: clipLine(name, 100), Project: filepath.Base(t.CWD), Path: t.CWD, Source: "App Server", UpdatedAt: tm, TitleSource: source})
+			result = append(result, Session{ID: t.ID, Title: name, Project: filepath.Base(t.CWD), Path: t.CWD, Source: label, SourceKind: label, UpdatedAt: tm, TitleSource: source})
 		}
 		if parsed.NextCursor == nil || *parsed.NextCursor == "" {
 			break
@@ -404,32 +411,23 @@ func (s AppServer) List(ctx context.Context, limit int) ([]Session, error) {
 	}
 	return result, nil
 }
+func titlePriority(source string) int {
+ switch source {case "app-server":return 4;case "index":return 3;case "user":return 2;case "preview":return 1;default:return 0}
+}
 func MergeSessions(local, remote []Session) []Session {
-	byID := make(map[string]Session, len(local)+len(remote))
-	for _, s := range local {
-		byID[s.ID] = s
-	}
-	for _, r := range remote {
-		if l, ok := byID[r.ID]; ok {
-			if (genericTitle(l.Title) || l.TitleSource == "unresolved") && !genericTitle(r.Title) {
-				l.Title = r.Title
-				l.TitleSource = r.TitleSource
-			}
-			if l.Path == "" {
-				l.Path = r.Path
-			}
-			if l.Source == "로컬" {
-				l.Source = r.Source
-			}
-			byID[r.ID] = l
-		} else {
-			byID[r.ID] = r
-		}
-	}
-	result := make([]Session, 0, len(byID))
-	for _, s := range byID {
-		result = append(result, s)
-	}
-	sort.Slice(result, func(i, j int) bool { return result[i].UpdatedAt.After(result[j].UpdatedAt) })
-	return result
+ byID:=make(map[string]Session,len(local)+len(remote))
+ for _,s:=range local {byID[s.ID]=s}
+ for _,r:=range remote {
+  if l,ok:=byID[r.ID];ok {
+   if titlePriority(r.TitleSource)>titlePriority(l.TitleSource)&&!genericTitle(r.Title){l.Title,l.TitleSource=r.Title,r.TitleSource}
+   if l.Path=="" {l.Path=r.Path}
+   if l.Project=="" {l.Project=r.Project}
+   if r.UpdatedAt.After(l.UpdatedAt){l.UpdatedAt=r.UpdatedAt}
+   byID[r.ID]=l
+  } else {byID[r.ID]=r}
+ }
+ result:=make([]Session,0,len(byID))
+ for _,s:=range byID{result=append(result,s)}
+ sort.Slice(result,func(i,j int)bool{return result[i].UpdatedAt.After(result[j].UpdatedAt)})
+ return result
 }

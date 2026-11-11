@@ -6,6 +6,9 @@ package main
 
 import (
 	"errors"
+ "crypto/sha256"
+ "encoding/hex"
+ "encoding/json"
 	"flag"
 	"fmt"
 	"os"
@@ -15,6 +18,7 @@ import (
 	"syscall"
 	"time"
 	"unsafe"
+ "codexqueuestudiov3/internal"
 )
 
 func message(s string) {
@@ -37,45 +41,55 @@ func wait(pid int) error {
 	}
 	return nil
 }
-func install(pid int, orig, stage string) error {
-	if pid <= 0 || !filepath.IsAbs(orig) || !filepath.IsAbs(stage) {
-		return errors.New("업데이트 경로 또는 PID가 올바르지 않습니다")
-	}
-	if !strings.EqualFold(filepath.Base(orig), "CodexQueueStudio.exe") || !strings.EqualFold(filepath.Base(stage), "CodexQueueStudio.new.exe") {
-		return errors.New("예상하지 못한 업데이트 파일명")
-	}
-	if filepath.Clean(orig) == filepath.Clean(stage) {
-		return errors.New("기존 실행 파일과 새 파일이 같습니다")
-	}
-	if st, err := os.Stat(stage); err != nil || st.Size() < 100000 || st.Size() > 50<<20 {
-		return errors.New("스테이징 파일이 없거나 크기가 유효하지 않습니다")
-	}
-	if err := wait(pid); err != nil {
-		return err
-	}
-	backup := orig + ".backup"
-	_ = os.Remove(backup)
-	var err error
-	for i := 0; i < 30; i++ {
-		err = os.Rename(orig, backup)
-		if err == nil {
-			break
-		}
-		time.Sleep(500 * time.Millisecond)
-	}
-	if err != nil {
-		return fmt.Errorf("기존 파일 백업 실패: %w", err)
-	}
-	if err = os.Rename(stage, orig); err != nil {
-		_ = os.Rename(backup, orig)
-		return fmt.Errorf("파일 교체 실패, 백업 복원 시도: %w", err)
-	}
-	cmd := exec.Command(orig)
-	if err = cmd.Start(); err != nil {
-		return fmt.Errorf("업데이트 적용 후 재실행 실패: %w", err)
-	}
-	_ = cmd.Process.Release()
-	return nil
+func verifyStage(stage string) error {
+ manifest,err:=os.ReadFile(filepath.Join(stage,"update-manifest.json"))
+ if err!=nil{return err}
+ var m internal.UpdateManifest
+ if err=json.Unmarshal(manifest,&m);err!=nil{return err}
+ if m.Version==""||len(m.Files)!=2{return errors.New("잘못된 매니페스트")}
+ for _,name:=range []string{"CodexQueueStudio.exe","CodexQueueUpdater.exe"} {
+  data,err:=os.ReadFile(filepath.Join(stage,name));if err!=nil{return err}
+  if len(data)<100000||len(data)>internal.MaxUpdateBinary{return errors.New("잘못된 업데이트 실행 파일 크기")}
+  digest:=sha256.Sum256(data)
+  if !strings.EqualFold(hex.EncodeToString(digest[:]),m.Files[name]) {return fmt.Errorf("매니페스트 해시 불일치: %s",name)}
+ }
+ return nil
+}
+func install(pid int,orig,stage string)error{
+ if pid<=0||!filepath.IsAbs(orig)||!filepath.IsAbs(stage){return errors.New("업데이트 경로 또는 PID가 올바르지 않습니다")}
+ if !strings.EqualFold(filepath.Base(orig),"CodexQueueStudio.exe"){return errors.New("대상 실행 파일명이 올바르지 않습니다")}
+ if err:=verifyStage(stage);err!=nil{return err}
+ if err:=wait(pid);err!=nil{return err}
+ directory:=filepath.Dir(orig)
+ names:=[]string{"CodexQueueStudio.exe","CodexQueueUpdater.exe"}
+ backed:=[]string{}
+ replaced:=[]string{}
+ rollback:=func(){
+  for _,name:=range replaced{_ =os.Remove(filepath.Join(directory,name))}
+  for _,name:=range backed{_ =os.Rename(filepath.Join(directory,name)+".backup",filepath.Join(directory,name))}
+ }
+ for _,name:=range names{
+  dst:=filepath.Join(directory,name)
+  if _,err:=os.Stat(dst);err==nil{
+   backup:=dst+".backup";_ =os.Remove(backup)
+   var moveErr error
+   for i:=0;i<30;i++{
+    moveErr=os.Rename(dst,backup)
+    if moveErr==nil{break}
+    time.Sleep(500*time.Millisecond)
+   }
+   if moveErr!=nil{rollback();return fmt.Errorf("백업 실패: %s: %w",name,moveErr)}
+   backed=append(backed,name)
+  }
+  input,err:=os.ReadFile(filepath.Join(stage,name))
+  if err!=nil{rollback();return err}
+  if err:=os.WriteFile(dst,input,0700);err!=nil{rollback();return fmt.Errorf("적용 실패: %s: %w",name,err)}
+  replaced=append(replaced,name)
+ }
+ cmd:=exec.Command(orig)
+ if err:=cmd.Start();err!=nil{rollback();return fmt.Errorf("재실행 실패: %w",err)}
+ _=cmd.Process.Release()
+ return nil
 }
 func main() {
 	pid := flag.Int("wait-pid", 0, "")

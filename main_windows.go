@@ -48,6 +48,9 @@ const (
 	LVM_SETTEXTBKCOLOR           = LVM_FIRST + 38
 	LVS_EX_FULLROWSELECT         = 0x20
 	LVS_EX_DOUBLEBUFFER          = 0x10000
+	LVS_EX_LABELTIP = 0x4000
+	LVM_SETCOLUMNWIDTH = LVM_FIRST + 30
+	EM_SETCUEBANNER = 0x1501
 	WM_CREATE                    = 1
 	WM_DESTROY                   = 2
 	WM_SIZE                      = 5
@@ -322,7 +325,7 @@ func (g *GUI) list(id int, headers []struct {
 }) {
 	g.add(id, "SysListView32", "", WS_TABSTOP|LVS_REPORT|LVS_SINGLESEL|LVS_SHOWSELALWAYS|LVS_OWNERDATA)
 	h := g.ctl(id)
-	send(h, LVM_SETEXTENDEDLISTVIEWSTYLE, 0, LVS_EX_FULLROWSELECT|LVS_EX_DOUBLEBUFFER)
+	send(h, LVM_SETEXTENDEDLISTVIEWSTYLE, 0, LVS_EX_FULLROWSELECT|LVS_EX_DOUBLEBUFFER|LVS_EX_LABELTIP)
 	for i, c := range headers {
 		title := utf(c.title)
 		col := LVCOLUMNW{Mask: 0x7, CX: c.width, Text: title, SubItem: int32(i)}
@@ -338,6 +341,7 @@ func (g *GUI) initControls() {
 		g.button(b.id, b.title)
 	}
 	g.edit(ID_SEARCH, false)
+ send(g.ctl(ID_SEARCH), EM_SETCUEBANNER, 0, strptr("Codex 작업 세션 검색"))
 	g.edit(ID_HISTORY, true)
 	g.edit(ID_MESSAGE, true)
 	g.add(ID_DATE, "SysDateTimePick32", "", WS_TABSTOP)
@@ -348,7 +352,7 @@ func (g *GUI) initControls() {
 	g.list(ID_SESSLIST, []struct {
 		title string
 		width int32
-	}{{"세션 제목", 260}, {"프로젝트", 140}, {"수정일", 135}})
+	}{{"세션 제목", 250}, {"프로젝트", 112}, {"출처", 90}, {"수정일", 95}})
 	g.list(ID_JOBLIST, []struct {
 		title string
 		width int32
@@ -409,7 +413,7 @@ func (g *GUI) layout() {
 	}
 	switch g.page {
 	case 0:
-		left := area * 45 / 100
+		left := area * 51 / 100
 		if left < 330 {
 			left = 330
 		}
@@ -417,6 +421,7 @@ func (g *GUI) layout() {
 		move(g.ctl(ID_SEARCH), x, 124, left-126, 35)
 		move(g.ctl(ID_REFRESH), x+left-116, 124, 116, 35)
 		move(g.ctl(ID_SESSLIST), x, 173, left, h-211)
+ for i,ratio:=range []int32{45,21,16,18}{send(g.ctl(ID_SESSLIST),LVM_SETCOLUMNWIDTH,uintptr(i),uintptr(left*ratio/100))}
 		xr := x + left + 18
 		move(g.ctl(ID_HISTORY), xr, 236, right, h-538)
 		move(g.ctl(ID_MESSAGE), xr, h-251, right, 117)
@@ -506,7 +511,7 @@ func (g *GUI) selectSession(idx int) {
 	settext(g.ctl(ID_HISTORY), g.history)
 	go func() {
 		var output strings.Builder
-		output.WriteString("세션: " + s.ID + "\r\n프로젝트: " + s.Path + "\r\n\r\n")
+		output.WriteString("제목: " + s.Title + "\r\n제목 정보: " + s.TitleSource + "\r\n출처: " + s.Source + "\r\n세션: " + s.ID + "\r\n프로젝트: " + s.Path + "\r\n\r\n")
 		if s.File != "" {
 			hist, err := internal.ReadHistory(s.File, 150)
 			if err != nil {
@@ -690,9 +695,9 @@ func (g *GUI) draw(hdc uintptr) {
 	fill(hdc, RECT{0, 0, 208, g.H}, p.side)
 	drawText(hdc, "◈", RECT{25, 26, 65, 64}, p.accent, g.bold, DT_SINGLELINE|DT_VCENTER)
 	drawText(hdc, "Codex Queue", RECT{58, 28, 199, 56}, p.text, g.bold, DT_SINGLELINE|DT_VCENTER)
-	drawText(hdc, "STUDIO  3.0", RECT{26, 65, 180, 91}, p.muted, g.small, DT_SINGLELINE)
+	drawText(hdc, "STUDIO  3.1", RECT{26, 65, 180, 91}, p.muted, g.small, DT_SINGLELINE)
 	title := "세션 탐색기"
-	sub := "Codex Desktop · CLI · App Server 통합"
+	sub := "Codex 작업 세션만 표시 · ChatGPT 일반 채팅 및 하위 에이전트 제외"
 	if g.page == 1 {
 		title = "예약 작업"
 		sub = "예약 실행 상태와 실패 이력을 관리합니다"
@@ -708,7 +713,7 @@ func (g *GUI) draw(hdc uintptr) {
 	case 0:
 		x := int32(233)
 		area := g.W - x - 24
-		left := area * 45 / 100
+		left := area * 51 / 100
 		if left < 330 {
 			left = 330
 		}
@@ -722,7 +727,7 @@ func (g *GUI) draw(hdc uintptr) {
 			heading = s.Title
 		}
 		drawText(hdc, heading, RECT{xr + 7, 171, xr + right - 8, 204}, p.text, g.bold, DT_SINGLELINE|DT_END_ELLIPSIS)
-		drawText(hdc, "세션 대화 기록", RECT{xr + 4, 207, xr + right, 230}, p.muted, g.small, DT_SINGLELINE)
+		drawText(hdc, "세션 대화 기록 · 저장된 제목 우선", RECT{xr + 4, 207, xr + right, 230}, p.muted, g.small, DT_SINGLELINE)
 		drawText(hdc, "예약할 메시지", RECT{xr + 4, g.H - 276, xr + right, g.H - 250}, p.text, g.font, DT_SINGLELINE)
 		drawText(hdc, "예약 날짜와 시간", RECT{xr + 4, g.H - 141, xr + right, g.H - 114}, p.muted, g.small, DT_SINGLELINE)
 	case 1:
@@ -758,8 +763,9 @@ func (g *GUI) drawButton(dis *DRAWITEMSTRUCT) {
 		fg = p.muted
 	}
 	if dis.ItemState&0x1 != 0 {
-		bg = p.border
-	}
+        bg=p.border
+        fg=p.text
+    }
 	roundBox(hdc, RECT{2, 2, dis.Rect.Right - dis.Rect.Left - 2, dis.Rect.Bottom - dis.Rect.Top - 2}, bg)
 	labels := map[int]string{ID_SESSIONS: "세션 탐색기", ID_JOBS: "예약 관리", ID_SETTINGS: "환경 설정", ID_THEME: "◐   테마 전환", ID_REFRESH: "새로고침", ID_SENDNOW: "지금 전송", ID_SCHEDULE: "예약 등록", ID_CANCEL: "예약 취소", ID_REACTIVATE: "선택 예약 재개", ID_ENGINE: "Codex 엔진 설치", ID_CHECK: "업데이트 확인", ID_UPDATE: "업데이트 설치", ID_SAVE: "경로 적용", ID_EXIT: "완전히 종료"}
 	text := labels[id]
@@ -784,7 +790,9 @@ func (g *GUI) notify(l uintptr) {
 			case 1:
 				text = s.Project
 			case 2:
-				text = s.UpdatedAt.Local().Format("01-02 15:04")
+                text = s.Source
+            case 3:
+                text = s.UpdatedAt.Local().Format("01-02 15:04")
 			}
 		}
 		if int(hdr.IDFrom) == ID_JOBLIST {
@@ -862,10 +870,7 @@ func mainWndProc(hwnd, msg, w, l uintptr) uintptr {
 	case WM_CTLCOLOREDIT, WM_CTLCOLORSTATIC:
 		call(g32, "SetTextColor", w, uintptr(g.pal.text))
 		call(g32, "SetBkColor", w, uintptr(g.pal.field))
-		if uint32(msg) == WM_CTLCOLORSTATIC {
-			return g.brushCard
-		}
-		return g.brushField
+        return g.brushField
 	case WM_COMMAND:
 		id := int(w & 0xFFFF)
 		if id == ID_SEARCH && (w>>16)&0xFFFF == EN_CHANGE {
@@ -957,7 +962,7 @@ func (g *GUI) applyUpdate(target string) {
 		g.alert(err.Error())
 		return
 	}
-	helper := filepath.Join(filepath.Dir(exe), "CodexQueueUpdater.exe")
+	helper := filepath.Join(target, "CodexQueueUpdater.exe")
 	if _, err = os.Stat(helper); err != nil {
 		g.alert("업데이터가 없어 자동 업데이트를 진행할 수 없습니다. ZIP 릴리스를 다시 설치하세요.")
 		return
@@ -972,8 +977,10 @@ func (g *GUI) applyUpdate(target string) {
 	call(u32, "DestroyWindow", g.hwnd)
 }
 func loadIcon(root string) uintptr {
-	_ = os.MkdirAll(root, 0700)
-	p := filepath.Join(root, "studio.ico")
+	h:=call(u32,"LoadImageW",call(k32,"GetModuleHandleW",0),1,IMAGE_ICON,0,0,LR_DEFAULTSIZE)
+ if h!=0{return h}
+ _ = os.MkdirAll(root, 0700)
+ p := filepath.Join(root, "studio.ico")
 	_ = os.WriteFile(p, iconBytes, 0600)
 	return call(u32, "LoadImageW", 0, strptr(p), IMAGE_ICON, 0, 0, LR_LOADFROMFILE|LR_DEFAULTSIZE)
 }

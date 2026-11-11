@@ -1,9 +1,7 @@
 name: Release Windows app
 on:
   push:
-    tags:
-      - 'v*'
-  workflow_dispatch:
+    tags: ['v*']
 permissions:
   contents: write
 jobs:
@@ -14,14 +12,28 @@ jobs:
       - uses: actions/setup-go@v5
         with:
           go-version-file: go.mod
-      - name: Run tests
-        shell: pwsh
-        run: go test ./...
-      - name: Compile native applications
+      - name: Verify version, test and analyze
         shell: pwsh
         run: |
-          go build -ldflags "-H windowsgui -s -w" -o CodexQueueStudio.exe .
-          go build -ldflags "-H windowsgui -s -w" -o CodexQueueUpdater.exe ./cmd/updater
+          $ErrorActionPreference = 'Stop'
+          $version = $env:GITHUB_REF_NAME.TrimStart('v')
+          $source = Get-Content core.go -Raw
+          if (!$source.Contains('const AppVersion = "'+$version+'"')) { throw 'Tag and AppVersion mismatch' }
+          go test ./...
+          if ($LASTEXITCODE -ne 0) { throw 'Go tests failed' }
+          go vet -unsafeptr=false ./...
+          if ($LASTEXITCODE -ne 0) { throw 'Go vet failed' }
+      - name: Build resource and Windows GUI applications
+        shell: pwsh
+        run: |
+          python -m pip install 'Pillow>=11,<13'
+          if ($LASTEXITCODE -ne 0) { throw 'Pillow install failed' }
+          python assets/build_resources.py
+          if ($LASTEXITCODE -ne 0) { throw 'Icon resource generation failed' }
+          go build -ldflags '-H windowsgui -s -w' -o CodexQueueStudio.exe .
+          if ($LASTEXITCODE -ne 0) { throw 'Main build failed' }
+          go build -ldflags '-H windowsgui -s -w' -o CodexQueueUpdater.exe ./cmd/updater
+          if ($LASTEXITCODE -ne 0) { throw 'Updater build failed' }
       - name: Download and verify official Codex runtime
         shell: pwsh
         run: |
@@ -29,32 +41,44 @@ jobs:
           $headers = @{ 'User-Agent' = 'CodexQueueStudio-Release' }
           $release = Invoke-RestMethod 'https://api.github.com/repos/openai/codex/releases/latest' -Headers $headers
           $asset = $release.assets | Where-Object { $_.name -eq 'codex-x86_64-pc-windows-msvc.exe.zip' } | Select-Object -First 1
-          if (!$asset) { throw 'Official Windows x64 Codex archive unavailable' }
-          if (!$asset.digest -or !$asset.digest.StartsWith('sha256:')) { throw 'Missing official SHA-256 digest' }
-          Invoke-WebRequest -Uri $asset.browser_download_url -OutFile 'codex-engine.zip' -Headers $headers
+          if (!$asset -or !$asset.digest -or !$asset.digest.StartsWith('sha256:')) { throw 'Official Codex runtime checksum unavailable' }
+          Invoke-WebRequest $asset.browser_download_url -OutFile 'codex-engine.zip' -Headers $headers
           $hash = (Get-FileHash 'codex-engine.zip' -Algorithm SHA256).Hash.ToLowerInvariant()
-          if ($hash -ne $asset.digest.Substring(7).ToLowerInvariant()) { throw 'Codex binary digest mismatch' }
+          if ($hash -ne $asset.digest.Substring(7).ToLowerInvariant()) { throw 'Codex runtime digest mismatch' }
           Expand-Archive 'codex-engine.zip' -DestinationPath 'codex-runtime' -Force
-          $exe = Get-ChildItem -Path 'codex-runtime' -Recurse -Filter '*.exe' | Where-Object { $_.Name -match '^codex(-x86_64-pc-windows-msvc)?\.exe$' } | Select-Object -First 1
-          if (!$exe) { throw 'Codex executable missing from verified archive' }
-          New-Item -ItemType Directory -Force -Path 'release/engine' | Out-Null
-          Copy-Item $exe.FullName 'release/engine/codex.exe'
-      - name: Package release
+          $exe = Get-ChildItem 'codex-runtime' -Recurse -File -Filter '*.exe' | Where-Object { $_.Name -match '^codex(-x86_64-pc-windows-msvc)?\.exe$' } | Select-Object -First 1
+          if (!$exe) { throw 'Codex executable missing' }
+          New-Item -ItemType Directory -Force -Path 'full/engine' | Out-Null
+          Copy-Item $exe.FullName 'full/engine/codex.exe'
+      - name: Create full-version package and independent update package
         shell: pwsh
         run: |
-          Copy-Item CodexQueueStudio.exe release/
-          Copy-Item CodexQueueUpdater.exe release/
-          Copy-Item README.md release/
-          Copy-Item LICENSE release/
-          Copy-Item THIRD_PARTY_NOTICES.md release/
-          Copy-Item assets/icon.ico release/
-          Compress-Archive -Path release/* -DestinationPath CodexQueueStudio-Windows-x64.zip -CompressionLevel Optimal
-          $h = (Get-FileHash CodexQueueStudio-Windows-x64.zip -Algorithm SHA256).Hash.ToLowerInvariant()
-          "$h  CodexQueueStudio-Windows-x64.zip" | Out-File -Encoding ascii CodexQueueStudio-Windows-x64.zip.sha256
-      - name: Publish GitHub release
+          $ErrorActionPreference = 'Stop'
+          $version = $env:GITHUB_REF_NAME.TrimStart('v')
+          New-Item -ItemType Directory -Force -Path update | Out-Null
+          foreach ($name in @('CodexQueueStudio.exe','CodexQueueUpdater.exe')) {
+            Copy-Item $name (Join-Path update $name)
+            Copy-Item $name (Join-Path full $name)
+          }
+          $checks = @{}
+          foreach ($name in @('CodexQueueStudio.exe','CodexQueueUpdater.exe')) {
+            $checks[$name] = (Get-FileHash (Join-Path update $name) -Algorithm SHA256.Hash.ToLowerInvariant()
+          }
+          $manifest = @{ version = $version; files = $checks } | ConvertTo-Json -Depth 5
+          [System.IO.File]::WriteAllText((Join-Path (Get-Location) 'update/update-manifest.json'),$manifest,[System.Text.UTF8Encoding]::new($false))
+          Copy-Item README.md,LICENSE,THIRD_PARTY_NOTICES.md full/
+          New-Item -ItemType Directory -Force -Path 'full/assets' | Out-Null
+          Copy-Item assets/icon.ico,assets/icon.png full/assets/
+          Compress-Archive -Path full/* -DestinationPath 'CodexQueueStudio-Windows-x64.zip' -CompressionLevel Optimal
+          Compress-Archive -Path update/* -DestinationPath 'CodexQueueStudio-update-Windows-x64.zip' -CompressionLevel Optimal
+          foreach ($name in @('CodexQueueStudio-Windows-x64.zip','CodexQueueStudio-update-Windows-x64.zip')) {
+            if (!(Test-Path $name) -or (Get-Item $name).Length -lt 100000) { throw "Invalid release package: $name" }
+          }
+      - name: Publish exactly two release assets
         uses: softprops/action-gh-release@v2
         with:
           generate_release_notes: true
+          fail_on_unmatched_files: true
           files: |
             CodexQueueStudio-Windows-x64.zip
-            CodexQueueStudio-Windows-x64.zip.sha256
+            CodexQueueStudio-update-Windows-x64.zip

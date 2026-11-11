@@ -37,7 +37,7 @@ func fakeServer() {
 		reply := map[string]any{"id": v.ID, "result": map[string]any{}}
 		switch v.Method {
 		case "thread/list":
-			reply["result"] = map[string]any{"data": []map[string]any{{"id": "11111111-1111-1111-1111-111111111111", "name": "Guardian review", "preview": "스타크래프트 캠페인 설계", "cwd": "/projects/game", "updatedAt": time.Now().Unix()}}, "nextCursor": nil}
+			reply["result"] = map[string]any{"data": []map[string]any{{"id": "11111111-1111-1111-1111-111111111111", "name": "Guardian review", "preview": "스타크래프트 캠페인 설계", "cwd": "/projects/game", "source": "vscode", "updatedAt": time.Now().Unix()}}, "nextCursor": nil}
 		case "thread/resume":
 			reply["result"] = map[string]any{"thread": map[string]any{"id": "11111111-1111-1111-1111-111111111111"}}
 		case "turn/start":

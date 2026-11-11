@@ -1,105 +1,55 @@
-# Codex Queue Studio v3.0.0
+# Codex Queue Studio 3.1.0
 
-A native Windows 11 session explorer and scheduler for OpenAI Codex.
-This is an independent companion app. It is not an official OpenAI product.
+Independent Windows companion application for Codex, not an official OpenAI product.
 
-## What changed from v2
+## New in 3.1.0
 
-- Native Win32 GUI with Windows 11 minimize, maximize, restore, and close controls.
-- Native common controls and app icon resources. No Edge, Chrome, WebView2,
-  Qt, Electron, Python, or BAT file is required to open the GUI.
-- Virtualized, compact session list. Search by name, project, path, or UUID.
-- Preferred session naming uses explicit human names. Generic titles such as
-  `Guardian review` are replaced by a meaningful user message when available.
-- Local JSONL session discovery works without an installed Codex CLI.
-- Optional App Server `thread/list` integration supplements local session data.
-- The managed Codex runtime supports `thread/resume` + `turn/start` and records
-  terminal outcomes. Users do not need to install `codex` on PATH.
-- Scheduled work is stored in the same user profile with Windows DPAPI encryption.
-- Old v2 pending CLI-queue jobs are paused for user review before conversion.
-- GitHub release update checks verify archive SHA-256 before installation.
+- Codex-only explorer excludes explicit ChatGPT/Atlas histories, subagents and unknown origins.
+- Title priority: authoritative App Server name, local session_index.jsonl name, first relevant user prompt, then 제목 미지정.
+- Native virtualized compact list shows title, project, source and modification time.
+- Windows 11 Win32 window controls, fixed light/dark contrast, multi-resolution icon and tray support.
+- GitHub Releases are built with exactly two files: complete version and separate update.
+- Update ZIPs are verified using GitHub SHA-256 and a per-executable manifest.
+- Staged update helper replaces the app and helper; backup restoration is attempted on error.
 
-## Get started
+## Use
 
-1. Download the release ZIP from GitHub Releases.
-2. Extract the full ZIP to a writable folder. Keep the included files together.
-3. Start `CodexQueueStudio.exe`. Do not launch an old v2 background instance.
-4. Choose a session from the compact explorer.
-5. Review its transcript. Enter a message and select a date and time.
-6. Select **지금 전송** or **예약 등록**.
-7. Keep Windows running. Closing the window moves the app into the tray.
-   Double-click the tray icon to reopen it. Select **완전히 종료** to stop it.
+1. Extract the complete Windows x64 release ZIP into a writable folder.
+2. Run CodexQueueStudio.exe, not a BAT launcher.
+3. Choose an eligible Codex work session and inspect its history.
+4. Enter a message and select immediate delivery or a scheduled date and time.
+5. Keep the PC awake and the app running in the notification area.
 
-The release ZIP includes `engine/codex.exe` from the verified official Codex
-release. If only the standalone GUI executable is available, use **환경 설정 →
-Codex 엔진 설치**. This downloads the official runtime after confirmation.
-Installation requires internet access and enough free disk space.
+The managed Codex engine is installed with the complete release. It can also be installed from settings. Codex Desktop and this application run as different processes. Concurrent editing of one thread may conflict.
 
-**Important:** Codex Desktop and a separate App Server are different runtime
-processes. Resuming a stored local session is supported by the Codex protocol.
-Injecting text into the *currently open desktop input field* is not supported.
-Concurrent editing of the same thread can cause conflicts. Test on a non-critical
-session before enabling scheduled unattended commands.
+## Session filtering and title rules
 
-**Approval safety:** Scheduled work does not automatically approve interactive
-security prompts. Requests needing approval can fail. Background completion
-cannot be guaranteed when the PC is off, asleep, logged out, or disconnected.
+Session eligibility is based on Codex source metadata. The accepted sources include cli, vscode, app, appServer, exec and Codex-named custom sources. ChatGPT and Atlas chat histories, subagent threads and unknown source kinds are not shown. This strict policy can hide genuine historical Codex sessions with missing metadata.
+
+A meaningful name from App Server takes precedence over the latest meaningful name in session_index.jsonl. If neither exists, a short user-message-based title is derived. This is not an official title or a rename. Generic Guardian review labels are not shown.
+
+## Release contract
+
+Two and only two ZIP assets are uploaded by a successful tagged release:
+
+- CodexQueueStudio-Windows-x64.zip — complete installation, verified official Codex runtime, icon, README and licenses.
+- CodexQueueStudio-update-Windows-x64.zip — GUI, updater, and update-manifest.json containing file SHA-256 values.
+
+The version tag vX.Y.Z must match AppVersion in core.go. Missing or invalid assets cause the workflow to fail.
+
+The update helper runs from a verified staging directory. It keeps executable backups and attempts rollback if replacement or restart fails. Users of old v3 installations must perform a one-time full-package upgrade because the original updater only replaced the main binary.
 
 ## Build from source
 
-Go 1.23 or later is required for development.
+Install Go 1.23+ and Python 3. Install the build-only Pillow library (Pillow>=11,<13). Run assets/build_resources.py before compiling both Go executables with the Windows GUI linker option. Python/Pillow are not needed at runtime.
 
-```powershell
-go test ./...
-go vet ./...
-go build -ldflags "-H windowsgui -s -w" -o CodexQueueStudio.exe .
-go build -ldflags "-H windowsgui -s -w" -o CodexQueueUpdater.exe ./cmd/updater
-```
+## Limitations
 
-Build on Windows. Keep `CodexQueueUpdater.exe` beside the application for
-in-place updates. No BAT file is required. The `.syso` resource embeds a Windows
-application icon and a Common Controls v6 manifest.
+- Session files: CODEX_HOME or the user profile's .codex directory.
+- Schedule state: LOCALAPPDATA/CodexQueueStudio/state.json, with Windows DPAPI encryption.
+- Cloud-only ChatGPT conversations are not listed.
+- No automatic security approvals are granted.
+- No guaranteed delivery while sleeping, powered off, logged out or offline.
+- Real Windows 11 rendering, live Codex Desktop work, Authenticode signing and update rollback still require acceptance tests.
 
-For reproducible icon resources, run `python assets/build_resources.py`.
-The script uses the Python standard library. It is not required at runtime.
-
-## Settings and storage
-
-- Session data: `%USERPROFILE%\.codex\sessions` and
-  `%USERPROFILE%\.codex\archived_sessions`, or `CODEX_HOME`.
-- Reservation state: `%LOCALAPPDATA%\CodexQueueStudio\state.json`.
-- Managed runtime: `%LOCALAPPDATA%\CodexQueueStudio\engine\codex.exe`.
-- Staged updates: `%LOCALAPPDATA%\CodexQueueStudio\updates`.
-- Program settings: theme, Codex home directory, and existing scheduled tasks.
-
-## Automatic updates
-
-The application checks the repository's latest published stable GitHub release
-at startup. A checked update is installed only after user confirmation.
-The updater stages the ZIP, checks its SHA-256 digest, backs up the previous
-binary, replaces the GUI executable, and launches the updated GUI.
-
-Create a signed release by pushing a version tag (`v3.0.1`, for example).
-`.github/workflows/release.yml` builds the GUI and updater, downloads the
-official Codex Windows binary, verifies it, and publishes a ZIP and `.sha256`.
-The current updater replaces the **main GUI binary**. To update the engine or
-updater helper itself, reinstall the full release ZIP.
-
-## Verification
-
-Run `go test ./...` and check `docs/VERIFICATION.md`. CI validates both Windows and Ubuntu.
-The current non-Windows build environment can cross-compile Windows PE binaries.
-It cannot verify actual GUI rendering or a live Codex Desktop session.
-A successful simulated App Server test is not proof of live server compatibility.
-
-## Security
-
-- Messages are encrypted at rest using Windows DPAPI per user.
-- The app uses an authenticated local Codex user profile. It stores no API key.
-- Engine downloads are restricted to official OpenAI Codex release assets.
-- Release ZIPs are restricted to this repository and require SHA-256 verification.
-- Interactive approvals are not silently accepted.
-- Interrupted tasks are marked uncertain instead of silently being replayed.
-- No localhost HTTP server, browser cookie, or browser extension is required.
-
-See `docs/AUDIT.md` for remaining risks and `docs/WORK_ORDERS.md` for scope.
+See docs/CHANGES_3_1.md and docs/VERIFICATION.md.

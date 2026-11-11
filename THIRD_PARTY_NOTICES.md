@@ -19,3 +19,7 @@ No downloaded upstream executable is committed to this source repository.
 The release archive includes the verified Codex runtime under `engine/`.
 Codex Queue Studio is an independent companion application, not an official
 OpenAI or Microsoft product. It must not imitate their trademarks.
+
+## Pillow (build-time only)
+
+Pillow generates Windows icon resources. It uses the HPND historical permission notice and disclaimer license. No Pillow runtime is bundled.

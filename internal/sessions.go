@@ -23,6 +23,7 @@ type Session struct {
 	Archived    bool      `json:"archived"`
 	File        string    `json:"file"`
 	TitleSource string    `json:"titleSource"`
+	SourceKind string `json:"sourceKind"`
 }
 
 type HistoryLine struct {
@@ -47,6 +48,7 @@ type sessionMeta struct {
 	CWD        string          `json:"cwd"`
 	Source     json.RawMessage `json:"source"`
 	Originator string          `json:"originator"`
+	ParentThreadID string `json:"parent_thread_id"`
 }
 type payloadMessage struct {
 	Type    string          `json:"type"`
@@ -146,6 +148,31 @@ func candidateTitle(text string) string {
 	return ""
 }
 
+// Use explicit session metadata to separate Codex work from ChatGPT chats.
+func classifySource(raw json.RawMessage, originator, parentID string) (string, bool) {
+ if parentID != "" { return "하위 에이전트",false }
+ var kind string
+ if json.Unmarshal(raw,&kind)!=nil {
+  var m map[string]json.RawMessage
+  if json.Unmarshal(raw,&m)!=nil {return "출처 불명",false}
+  if _,ok:=m["subAgent"];ok {return "하위 에이전트",false}
+  if v,ok:=m["custom"];ok { _=json.Unmarshal(v,&kind) } else {
+   for k:=range m { kind=k;break }
+  }
+ }
+ kind=strings.ToLower(strings.TrimSpace(kind))
+ from:=strings.ToLower(strings.TrimSpace(originator))
+ if strings.Contains(from,"chatgpt")||strings.Contains(from,"atlas"){return "ChatGPT",false}
+ switch kind {
+ case "chatgpt","atlas","gpt","chat","openai-chat":return "ChatGPT",false
+ case "subagent","review","compact","memory_consolidation":return "하위 에이전트",false
+ case "cli":return "Codex CLI",true
+ case "vscode":return "Codex IDE",true
+ case "app","appserver","codex","codex_desktop":return "Codex 앱",true
+ case "exec":return "Codex 실행",true
+ default:return "출처 불명",false
+ }
+}
 func scanJSONLines(path string, maxBytes int64, maxLines int, visit func([]byte) bool) error {
 	f, err := os.Open(path)
 	if err != nil {
@@ -194,7 +221,7 @@ func ScanSessions(home string, maxFiles int) ([]Session, error) {
 			n = e.Title
 		}
 		if id != "" && n != "" {
-			titles[id] = clipLine(n, 100)
+			titles[id] = strings.TrimSpace(n)
 		}
 		return true
 	})
@@ -237,6 +264,7 @@ func ScanSessions(home string, maxFiles int) ([]Session, error) {
 			idxTitle := ""
 			firstUser := ""
 			var gotMeta bool
+			var eligible bool
 			_ = scanJSONLines(path, 12<<20, 2800, func(line []byte) bool {
 				var event rolloutEvent
 				if json.Unmarshal(line, &event) != nil {
@@ -248,7 +276,9 @@ func ScanSessions(home string, maxFiles int) ([]Session, error) {
 						s.ID = meta.ID
 						s.Path = meta.CWD
 						s.Project = filepath.Base(meta.CWD)
-						s.Source = sourceText(meta.Source, meta.Originator)
+						label,ok:=classifySource(meta.Source,meta.Originator,meta.ParentThreadID)
+						s.Source,s.SourceKind=label,label
+						eligible=ok
 						gotMeta = true
 					}
 				}
@@ -259,18 +289,18 @@ func ScanSessions(home string, maxFiles int) ([]Session, error) {
 				}
 				return !gotMeta || firstUser == ""
 			})
-			if s.ID == "" {
+			if s.ID == "" || !gotMeta || !eligible {
 				return nil
 			}
 			idxTitle = titles[s.ID]
 			if idxTitle != "" && !genericTitle(idxTitle) {
-				s.Title = idxTitle
+				s.Title = strings.TrimSpace(idxTitle)
 				s.TitleSource = "index"
 			} else if firstUser != "" {
 				s.Title = firstUser
 				s.TitleSource = "user"
-			} else if idxTitle != "" {
-				s.Title = "제목 없음 · " + idxTitle
+			} else {
+				s.Title = "제목 미지정"
 				s.TitleSource = "unresolved"
 			}
 			if s.Project == "" || s.Project == "." {

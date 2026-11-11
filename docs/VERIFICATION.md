@@ -1,32 +1,22 @@
-# Verification report — 2026-11-11
+# Verification — v3.1.0
 
-## Executed checks
+## Verified locally
 
-| Check | Result | Environment |
-|---|---|---|
-| `go test ./...` | PASS; 12 tests | Linux amd64 / Go 1.23.2 |
-| `GOOS=windows GOARCH=amd64 CGO_ENABLED=0 go build ... .` | PASS | Linux cross-compiler |
-| GitHub Actions Windows + Ubuntu CI | PASS on commit `8979fe21505968e15df920f4a79c0f77161d1af0` | Hosted CI, tests + native Windows build |
-| `GOOS=windows GOARCH=amd64 CGO_ENABLED=0 go build ... ./cmd/updater` | PASS | Linux cross-compiler |
-| `.rsrc` icon and manifest resource structure | PASS, COFF resource inspection | GNU objdump |
-| Source-only session parsing, `Guardian review` fallback | PASS, fixture | Go tests |
-| App Server `thread/list` and `thread/resume` + `turn/start` | PASS, *simulated server only* | Go tests |
-| State file encryption and crash recovery | PASS, unit test | Go tests |
-| Windows 11 native window interaction | NOT RUN | Windows unavailable |
-| Live Codex Desktop session and transcript | NOT RUN | User profile unavailable |
-| Live Codex engine installation/download | NOT RUN | Internet and Windows unavailable |
-| Live scheduled message send | NOT RUN | Real Codex unavailable |
-| GitHub Actions | PASS on verified prior commit | Latest post-test run pending |
-| Signed GitHub Release | NOT RUN | Needs real Windows acceptance |
+- Go unit tests: PASS.
+- Go race detector on Linux: PASS.
+- Go vet: PASS.
+- Windows x64 GUI and updater cross-compilation: PASS.
+- Codex versus ChatGPT session source fixtures: PASS.
+- Exact title priority and Guardian fallback fixtures: PASS.
+- Update archive tamper, version and unexpected-path rejection tests: PASS.
+- Multi-resolution icon asset and Windows resource generation: PASS.
 
-The test count excludes Windows native UI smoke tests. A successful cross-build
-proves compile compatibility, not correct rendering or runtime behavior.
+## Not verified
 
-## Reproduction
+- Actual Windows 11 rendering and taskbar/tray icon.
+- User's real Codex Desktop session provenance and names.
+- Live scheduled turn submission and concurrent Desktop behavior.
+- Windows DPAPI, two-binary replacement, rollback and SmartScreen.
+- Successful GitHub Release publication with exactly two ZIP assets.
 
-```powershell
-go test -v ./...
-go vet -unsafeptr=false ./...
-go build -ldflags "-H windowsgui -s -w" -o CodexQueueStudio.exe .
-go build -ldflags "-H windowsgui -s -w" -o CodexQueueUpdater.exe ./cmd/updater
-```
+Release gate: Do not tag a production release until these high-risk acceptance checks pass.

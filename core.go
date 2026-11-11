@@ -1,9 +1,7 @@
 package main
 
 import (
-	"archive/zip"
-	"bytes"
-	"context"
+			"context"
 	"crypto/sha256"
 	"encoding/hex"
 	"encoding/json"
@@ -21,7 +19,7 @@ import (
 	"codexqueuestudiov3/internal"
 )
 
-const AppVersion = "3.0.0"
+const AppVersion = "3.1.0"
 const repoReleases = "https://api.github.com/repos/scarlel96-design/Codex-Queue-Studio/releases/latest"
 
 type Core struct {
@@ -376,9 +374,14 @@ func (c *Core) CheckUpdate(ctx context.Context) (*UpdateInfo, error) {
 	if !newerTag(rel.Tag, AppVersion) {
 		return nil, nil
 	}
-	for _, a := range rel.Assets {
-		if a.Name == "CodexQueueStudio-Windows-x64.zip" {
-			if a.Size <= 0 || a.Size > 60<<20 || !strings.HasPrefix(a.Digest, "sha256:") || len(a.Digest) != 71 || !strings.HasPrefix(a.URL, "https://github.com/scarlel96-design/Codex-Queue-Studio/releases/download/") {
+	fullFound := false
+ for _, a := range rel.Assets {
+  if a.Name=="CodexQueueStudio-Windows-x64.zip" && a.Size>0 {fullFound=true}
+ }
+ if !fullFound {return nil,errors.New("릴리스에 전체 설치 패키지가 없습니다")}
+ for _, a := range rel.Assets {
+  if a.Name=="CodexQueueStudio-update-Windows-x64.zip" {
+			if a.Size <= 0 || a.Size > internal.MaxUpdateArchive || !strings.HasPrefix(a.Digest, "sha256:") || len(a.Digest) != 71 || !strings.HasPrefix(a.URL, "https://github.com/scarlel96-design/Codex-Queue-Studio/releases/download/") {
 				return nil, errors.New("업데이트 릴리스의 무결성 정보가 유효하지 않습니다")
 			}
 			info := &UpdateInfo{Tag: rel.Tag, URL: a.URL, Digest: strings.TrimPrefix(a.Digest, "sha256:"), Size: a.Size}
@@ -404,7 +407,7 @@ func (c *Core) DownloadUpdate(ctx context.Context, upd UpdateInfo) (string, erro
 	if resp.StatusCode != 200 {
 		return "", fmt.Errorf("업데이트 다운로드 HTTP %d", resp.StatusCode)
 	}
-	raw, err := io.ReadAll(io.LimitReader(resp.Body, (60<<20)+1))
+	raw, err := io.ReadAll(io.LimitReader(resp.Body, internal.MaxUpdateArchive+1))
 	if err != nil {
 		return "", err
 	}
@@ -415,50 +418,6 @@ func (c *Core) DownloadUpdate(ctx context.Context, upd UpdateInfo) (string, erro
 	if !strings.EqualFold(hex.EncodeToString(sum[:]), upd.Digest) {
 		return "", errors.New("업데이트 SHA256 검증 실패")
 	}
-	archive, err := zip.NewReader(bytesReader(raw), int64(len(raw)))
-	if err != nil {
-		return "", err
-	}
-	var file *zip.File
-	for _, f := range archive.File {
-		if f.Name == "CodexQueueStudio.exe" && f.UncompressedSize64 < 50<<20 {
-			file = f
-			break
-		}
-	}
-	if file == nil {
-		return "", errors.New("업데이트 패키지에 실행 파일이 없습니다")
-	}
-	r, err := file.Open()
-	if err != nil {
-		return "", err
-	}
-	defer r.Close()
-	dir := filepath.Join(c.root, "updates")
-	if err = os.MkdirAll(dir, 0700); err != nil {
-		return "", err
-	}
-	target := filepath.Join(dir, "CodexQueueStudio.new.exe")
-	tmp := target + ".tmp"
-	h, err := os.Create(tmp)
-	if err != nil {
-		return "", err
-	}
-	_, err = io.Copy(h, io.LimitReader(r, 50<<20))
-	if err != nil {
-		h.Close()
-		os.Remove(tmp)
-		return "", err
-	}
-	if err = h.Sync(); err != nil {
-		h.Close()
-		os.Remove(tmp)
-		return "", err
-	}
-	h.Close()
-	if err = os.Rename(tmp, target); err != nil {
-		return "", err
-	}
-	return target, nil
+	return internal.StageUpdateArchive(raw,filepath.Join(c.root,"updates"),upd.Tag)
 }
-func bytesReader(b []byte) *bytes.Reader { return bytes.NewReader(b) }
+
