@@ -16,7 +16,7 @@ An item is not fully verified until its acceptance test passes on Windows 11.
 | WO-09 | Auto updates | GitHub release metadata; hash verification; staged backup and updater | Cross-build PASS | Signed release and live update test |
 | WO-10 | App icon | Custom multi-resolution ICO plus PE resource group and manifest | PE resource inspection PASS | Windows Explorer and taskbar visual test |
 | WO-11 | OSS and maintainability | Go standard library; official open-source Codex engine; GitHub CI | Manifest and license added | Dependency license review |
-| WO-12 | GitHub source distribution | Source tree and CI/release workflows | Pending GitHub commit verification | Verify commits and Actions |
+| WO-12 | GitHub source distribution | Source tree and CI/release workflows | 29 files committed; Windows and Linux CI PASS | Publish signed prerelease after live acceptance |
 
 ## Release gate
 
