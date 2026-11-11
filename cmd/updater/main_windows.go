@@ -32,8 +32,9 @@ func wait(pid int) error {
 	open := kernel.NewProc("OpenProcess")
 	h, _, err := open.Call(0x00100000, 0, uintptr(pid))
 	if h == 0 {
-		return fmt.Errorf("프로세스를 열지 못했습니다: %w", err)
-	}
+ if errors.Is(err,syscall.Errno(87)){return nil} // parent already exited
+ return fmt.Errorf("프로세스를 열지 못했습니다: %w",err)
+}
 	defer kernel.NewProc("CloseHandle").Call(h)
 	r, _, e := kernel.NewProc("WaitForSingleObject").Call(h, 90000)
 	if r != 0 {
@@ -88,8 +89,40 @@ func install(pid int,orig,stage string)error{
  }
  cmd:=exec.Command(orig)
  if err:=cmd.Start();err!=nil{rollback();return fmt.Errorf("재실행 실패: %w",err)}
+ if err:=awaitAppWindow(cmd.Process,30*time.Second);err!=nil{
+  _=cmd.Process.Kill()
+  _,_=cmd.Process.Wait()
+  rollback()
+  return fmt.Errorf("업데이트 후 시작 검사 실패: %w",err)
+ }
  _=cmd.Process.Release()
+ for _,name:=range backed{_ =os.Remove(filepath.Join(directory,name)+".backup")}
+ _=os.RemoveAll(stage)
  return nil
+}
+// Confirm the new native window belongs to the launched PID.
+// File replacement alone is not sufficient to declare update success.
+func awaitAppWindow(proc *os.Process,timeout time.Duration)error{
+ user:=syscall.NewLazyDLL("user32.dll")
+ find:=user.NewProc("FindWindowW")
+ owner:=user.NewProc("GetWindowThreadProcessId")
+ title,_:=syscall.UTF16PtrFromString("CodexQueueStudioNativeV3")
+ end:=time.Now().Add(timeout)
+ for time.Now().Before(end){
+  hwnd,_,_:=find.Call(uintptr(unsafe.Pointer(title)),0)
+  if hwnd!=0{
+   var pid uint32
+   owner.Call(hwnd,uintptr(unsafe.Pointer(&pid)))
+   if pid==uint32(proc.Pid){return nil}
+  }
+  h,_,_:=syscall.NewLazyDLL("kernel32.dll").NewProc("OpenProcess").Call(0x00100000,0,uintptr(proc.Pid))
+  if h==0{return errors.New("앱 프로세스가 종료되었습니다")}
+  waited,_,_:=syscall.NewLazyDLL("kernel32.dll").NewProc("WaitForSingleObject").Call(h,0)
+  syscall.NewLazyDLL("kernel32.dll").NewProc("CloseHandle").Call(h)
+  if waited==0{return errors.New("앱 프로세스가 즉시 종료되었습니다")}
+  time.Sleep(350*time.Millisecond)
+ }
+ return errors.New("새 앱 창 확인 시간 초과")
 }
 func main() {
 	pid := flag.Int("wait-pid", 0, "")

@@ -53,3 +53,12 @@ Install Go 1.23+ and Python 3. Install the build-only Pillow library (Pillow>=11
 - Real Windows 11 rendering, live Codex Desktop work, Authenticode signing and update rollback still require acceptance tests.
 
 See docs/CHANGES_3_1.md and docs/VERIFICATION.md.
+
+
+## Preview update verification: 3.1.0 → 3.2.0
+
+Version 3.1.0 is the repaired preview baseline. Version 3.2.0 is a separate preview test release. Both are GitHub prereleases and publish two ZIP assets: the full installation and an independent verified update. The app checks prereleases while on the 3.x preview lineage. It can promote to the later public stable 1.0.0 without a numeric-version conflict. The stable 1.x channel ignores preview releases.
+
+Install the complete 3.1.0 ZIP to test the transition. Open Settings > Update Check, then install 3.2.0. The update helper checks the new app's native window before declaring success, and tries to restore backups on failure. Settings and scheduled messages remain in the local app data directory, outside the installation folder.
+
+The release workflow is activated by changes to .release-candidate on main, with required tests, hash checks, and exactly two attached ZIPs. Public 1.0.0 remains blocked until Windows UI, live Codex and updater rollback tests pass. See docs/UPDATE_ACCEPTANCE.md.

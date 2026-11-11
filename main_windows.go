@@ -391,11 +391,11 @@ func (g *GUI) updateColors() {
 }
 func (g *GUI) layout() {
 	w, h := g.W, g.H
-	if w < 800 {
-		w = 800
+	if w < 1190 {
+		w = 1190
 	}
-	if h < 580 {
-		h = 580
+	if h < 720 {
+		h = 720
 	}
 	g.W = w
 	g.H = h
@@ -639,9 +639,9 @@ func (g *GUI) handleButton(id int) {
 			if err != nil {
 				g.core.setStatus(err.Error())
 			} else if upd == nil {
-				g.core.setStatus("현재 최신 버전입니다. GitHub 릴리스가 아직 없다면 업데이트가 표시되지 않습니다.")
+				g.core.setStatus("현재 설치 가능한 새 버전이 없습니다. (시험 및 정식 채널 확인)")
 			} else {
-				g.core.setStatus("새 버전: " + upd.Tag)
+				g.core.setStatus("업데이트 발견: " + upd.Tag + " · 설치 전 무결성 검증")
 			}
 			call(u32, "PostMessageW", g.hwnd, WM_APP+1, 0, 0)
 		}()
@@ -695,7 +695,7 @@ func (g *GUI) draw(hdc uintptr) {
 	fill(hdc, RECT{0, 0, 208, g.H}, p.side)
 	drawText(hdc, "◈", RECT{25, 26, 65, 64}, p.accent, g.bold, DT_SINGLELINE|DT_VCENTER)
 	drawText(hdc, "Codex Queue", RECT{58, 28, 199, 56}, p.text, g.bold, DT_SINGLELINE|DT_VCENTER)
-	drawText(hdc, "STUDIO  3.1", RECT{26, 65, 180, 91}, p.muted, g.small, DT_SINGLELINE)
+	drawText(hdc, "STUDIO  " + AppVersion + "  · PREVIEW", RECT{26, 65, 180, 91}, p.muted, g.small, DT_SINGLELINE)
 	title := "세션 탐색기"
 	sub := "Codex 작업 세션만 표시 · ChatGPT 일반 채팅 및 하위 에이전트 제외"
 	if g.page == 1 {
@@ -703,8 +703,9 @@ func (g *GUI) draw(hdc uintptr) {
 		sub = "예약 실행 상태와 실패 이력을 관리합니다"
 	} else if g.page == 2 {
 		title = "환경 설정"
-		sub = "독립 Codex 엔진 · 업데이트 · 세션 경로"
+		sub = "Codex 엔진 · GitHub Releases 시험 채널 · 예약 데이터 보호"
 	}
+	roundBox(hdc, RECT{234, 19, 299, 23}, p.accent)
 	drawText(hdc, title, RECT{234, 28, g.W - 30, 65}, p.text, g.bold, DT_SINGLELINE)
 	drawText(hdc, sub, RECT{234, 74, g.W - 30, 105}, p.muted, g.font, DT_SINGLELINE)
 	status := g.core.Status()
@@ -840,7 +841,7 @@ func mainWndProc(hwnd, msg, w, l uintptr) uintptr {
 		return 0
 	case WM_GETMINMAXINFO:
 		m := (*MINMAXINFO)(unsafe.Pointer(l))
-		m.MinTrackSize = POINT{X: 1180, Y: 690}
+		m.MinTrackSize = POINT{X: 1230, Y: 750}
 		return 0
 	case WM_SIZE:
 		g.W = int32(l & 0xFFFF)

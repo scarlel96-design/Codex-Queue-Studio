@@ -20,7 +20,7 @@ import (
 )
 
 const AppVersion = "3.1.0"
-const repoReleases = "https://api.github.com/repos/scarlel96-design/Codex-Queue-Studio/releases/latest"
+const repoReleases = "https://api.github.com/repos/scarlel96-design/Codex-Queue-Studio/releases?per_page=40"
 
 type Core struct {
 	root     string
@@ -33,12 +33,15 @@ type Core struct {
 	stop     chan struct{}
 }
 type UpdateInfo struct {
+	Prerelease bool
 	Tag    string
 	URL    string
 	Digest string
 	Size   int64
 }
 type updateRelease struct {
+	Draft bool `json:"draft"`
+	Prerelease bool `json:"prerelease"`
 	Tag    string `json:"tag_name"`
 	Assets []struct {
 		Name   string `json:"name"`
@@ -350,49 +353,65 @@ func newerTag(remote, current string) bool {
 	return false
 }
 
-func (c *Core) CheckUpdate(ctx context.Context) (*UpdateInfo, error) {
-	req, err := http.NewRequestWithContext(ctx, "GET", repoReleases, nil)
-	if err != nil {
-		return nil, err
-	}
-	req.Header.Set("User-Agent", "CodexQueueStudio/3.0")
-	resp, err := internal.HTTPClient().Do(req)
-	if err != nil {
-		return nil, err
-	}
-	defer resp.Body.Close()
-	if resp.StatusCode == 404 {
-		return nil, nil
-	}
-	if resp.StatusCode != 200 {
-		return nil, fmt.Errorf("GitHub 업데이트 조회 HTTP %d", resp.StatusCode)
-	}
-	var rel updateRelease
-	if err = json.NewDecoder(io.LimitReader(resp.Body, 2<<20)).Decode(&rel); err != nil {
-		return nil, err
-	}
-	if !newerTag(rel.Tag, AppVersion) {
-		return nil, nil
-	}
-	fullFound := false
- for _, a := range rel.Assets {
-  if a.Name=="CodexQueueStudio-Windows-x64.zip" && a.Size>0 {fullFound=true}
+// Version 3.x is the test lineage. A future public 1.x stable release
+// must remain reachable even when its numeric version is lower.
+func updatePriority(tag string, preview bool, current string) int64 {
+ var major,minor,patch int
+ if n,e:=fmt.Sscanf(strings.TrimPrefix(tag,"v"),"%d.%d.%d",&major,&minor,&patch);e!=nil||n!=3||major<0||minor<0||patch<0||minor>99999||patch>99999{return -1}
+ if strings.TrimPrefix(current,"v")==strings.TrimPrefix(tag,"v"){return -1}
+ if strings.HasPrefix(strings.TrimPrefix(current,"v"),"3."){
+  if !preview&&major>=1&&major<3{return 1000000000000+int64(major)*10000000000+int64(minor)*100000+int64(patch)}
+  if preview&&major==3&&newerTag(tag,current){return int64(major)*10000000000+int64(minor)*100000+int64(patch)}
+  return -1
  }
- if !fullFound {return nil,errors.New("릴리스에 전체 설치 패키지가 없습니다")}
- for _, a := range rel.Assets {
-  if a.Name=="CodexQueueStudio-update-Windows-x64.zip" {
-			if a.Size <= 0 || a.Size > internal.MaxUpdateArchive || !strings.HasPrefix(a.Digest, "sha256:") || len(a.Digest) != 71 || !strings.HasPrefix(a.URL, "https://github.com/scarlel96-design/Codex-Queue-Studio/releases/download/") {
-				return nil, errors.New("업데이트 릴리스의 무결성 정보가 유효하지 않습니다")
-			}
-			info := &UpdateInfo{Tag: rel.Tag, URL: a.URL, Digest: strings.TrimPrefix(a.Digest, "sha256:"), Size: a.Size}
-			c.mu.Lock()
-			c.update = info
-			c.mu.Unlock()
-			return info, nil
-		}
-	}
-	return nil, nil
+ if preview||!newerTag(tag,current){return -1}
+ return int64(major)*10000000000+int64(minor)*100000+int64(patch)
 }
+func chooseUpdate(releases []updateRelease,current string)(*UpdateInfo,error){
+ var selected *UpdateInfo
+ rank:=int64(-1)
+ var issue error
+ for _,rel:=range releases{
+  if rel.Draft{continue}
+  priority:=updatePriority(rel.Tag,rel.Prerelease,current)
+  if priority<0{continue}
+  full,update:=0,0
+  var url,digest string
+  var size int64
+  for _,asset:=range rel.Assets{
+   if asset.Name=="CodexQueueStudio-Windows-x64.zip"&&asset.Size>100000{full++}
+   if asset.Name=="CodexQueueStudio-update-Windows-x64.zip" {
+    update++;url=asset.URL;digest=asset.Digest;size=asset.Size
+   }
+  }
+  valid:=full==1&&update==1&&size>100000&&size<=internal.MaxUpdateArchive&&len(digest)==71&&strings.HasPrefix(digest,"sha256:")&&strings.HasPrefix(url,"https://github.com/scarlel96-design/Codex-Queue-Studio/releases/download/")
+  if valid{for _,ch:=range digest[7:]{if !strings.ContainsRune("0123456789abcdefABCDEF",ch){valid=false;break}}}
+  if !valid{if issue==nil{issue=fmt.Errorf("%s: 전체 ZIP 또는 업데이트 ZIP의 무결성 정보가 잘못되었습니다",rel.Tag)};continue}
+  if priority>rank{
+   rank=priority
+   selected=&UpdateInfo{Tag:rel.Tag,URL:url,Digest:digest[7:],Size:size,Prerelease:rel.Prerelease}
+  }
+ }
+ if selected==nil&&issue!=nil{return nil,issue}
+ return selected,nil
+}
+func (c *Core) CheckUpdate(ctx context.Context)(*UpdateInfo,error){
+ req,err:=http.NewRequestWithContext(ctx,"GET",repoReleases,nil)
+ if err!=nil{return nil,err}
+ req.Header.Set("User-Agent","CodexQueueStudio/"+AppVersion)
+ req.Header.Set("Accept","application/vnd.github+json")
+ resp,err:=internal.HTTPClient().Do(req)
+ if err!=nil{return nil,err}
+ defer resp.Body.Close()
+ if resp.StatusCode==404{return nil,nil}
+ if resp.StatusCode!=200{return nil,fmt.Errorf("GitHub 업데이트 조회 HTTP %d",resp.StatusCode)}
+ var releases []updateRelease
+ if err=json.NewDecoder(io.LimitReader(resp.Body,3<<20)).Decode(&releases);err!=nil{return nil,err}
+ choice,err:=chooseUpdate(releases,AppVersion)
+ c.mu.Lock();c.update=choice;c.mu.Unlock()
+ return choice,err
+}
+
 func (c *Core) UpdateAvailable() *UpdateInfo { c.mu.Lock(); defer c.mu.Unlock(); return c.update }
 func (c *Core) DownloadUpdate(ctx context.Context, upd UpdateInfo) (string, error) {
 	req, err := http.NewRequestWithContext(ctx, "GET", upd.URL, nil)
