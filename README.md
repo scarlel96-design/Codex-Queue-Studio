@@ -62,3 +62,7 @@ Version 3.1.0 is the repaired preview baseline. Version 3.2.0 is a separate prev
 Install the complete 3.1.0 ZIP to test the transition. Open Settings > Update Check, then install 3.2.0. The update helper checks the new app's native window before declaring success, and tries to restore backups on failure. Settings and scheduled messages remain in the local app data directory, outside the installation folder.
 
 The release workflow is activated by changes to .release-candidate on main, with required tests, hash checks, and exactly two attached ZIPs. Public 1.0.0 remains blocked until Windows UI, live Codex and updater rollback tests pass. See docs/UPDATE_ACCEPTANCE.md.
+
+## 3.2.0 preview candidate
+
+This is the planned in-app update target for the repaired 3.1.0 baseline. The updater now blocks installation during an active Codex send, keeps session selection during refresh, and writes new executables through atomic staging. The public version number **1.0.0** remains reserved until an actual Windows update and live Codex regression test pass. See [3.2.0 preview acceptance](docs/RELEASE_3_2.md).

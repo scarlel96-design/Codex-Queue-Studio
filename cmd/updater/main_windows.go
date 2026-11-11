@@ -56,6 +56,18 @@ func verifyStage(stage string) error {
  }
  return nil
 }
+// atomicWriteExecutable prevents a crash from leaving a partially written EXE.
+func atomicWriteExecutable(directory,name string,data []byte)error{
+ tmp,err:=os.CreateTemp(directory,".cqs-incoming-*.tmp")
+ if err!=nil{return err}
+ path:=tmp.Name()
+ defer os.Remove(path)
+ if err:=tmp.Chmod(0700);err!=nil{_ =tmp.Close();return err}
+ if _,err=tmp.Write(data);err!=nil{_ =tmp.Close();return err}
+ if err=tmp.Sync();err!=nil{_ =tmp.Close();return err}
+ if err=tmp.Close();err!=nil{return err}
+ return os.Rename(path,filepath.Join(directory,name))
+}
 func install(pid int,orig,stage string)error{
  if pid<=0||!filepath.IsAbs(orig)||!filepath.IsAbs(stage){return errors.New("업데이트 경로 또는 PID가 올바르지 않습니다")}
  if !strings.EqualFold(filepath.Base(orig),"CodexQueueStudio.exe"){return errors.New("대상 실행 파일명이 올바르지 않습니다")}
@@ -84,7 +96,7 @@ func install(pid int,orig,stage string)error{
   }
   input,err:=os.ReadFile(filepath.Join(stage,name))
   if err!=nil{rollback();return err}
-  if err:=os.WriteFile(dst,input,0700);err!=nil{rollback();return fmt.Errorf("적용 실패: %s: %w",name,err)}
+  if err:=atomicWriteExecutable(directory,name,input);err!=nil{rollback();return fmt.Errorf("적용 실패: %s: %w",name,err)}
   replaced=append(replaced,name)
  }
  cmd:=exec.Command(orig)

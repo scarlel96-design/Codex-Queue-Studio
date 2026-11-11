@@ -19,7 +19,7 @@ import (
 	"codexqueuestudiov3/internal"
 )
 
-const AppVersion = "3.1.0"
+const AppVersion = "3.2.0"
 const repoReleases = "https://api.github.com/repos/scarlel96-design/Codex-Queue-Studio/releases?per_page=40"
 
 type Core struct {
@@ -413,6 +413,13 @@ func (c *Core) CheckUpdate(ctx context.Context)(*UpdateInfo,error){
 }
 
 func (c *Core) UpdateAvailable() *UpdateInfo { c.mu.Lock(); defer c.mu.Unlock(); return c.update }
+// CanInstallUpdate protects an active Codex submission from interruption.
+func (c *Core) CanInstallUpdate() error {
+ for _,job:=range c.store.Snapshot().Jobs {
+  if job.State=="sending" {return errors.New("예약 메시지 전송 중입니다. 전송이 끝난 뒤 업데이트하세요")}
+ }
+ return nil
+}
 func (c *Core) DownloadUpdate(ctx context.Context, upd UpdateInfo) (string, error) {
 	req, err := http.NewRequestWithContext(ctx, "GET", upd.URL, nil)
 	if err != nil {

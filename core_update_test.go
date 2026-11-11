@@ -1,6 +1,6 @@
 package main
 
-import("testing";"strings")
+import("testing";"strings";"codexqueuestudiov3/internal")
 func updateReleaseForTest(tag string,pre,complete bool) updateRelease{
  r:=updateRelease{Tag:tag,Prerelease:pre}
  if complete{r.Assets=append(r.Assets,struct{
@@ -38,4 +38,15 @@ func TestUpdateAssetContractAndChannel(t *testing.T){
  selected,err=chooseUpdate([]updateRelease{target},"1.0.0")
  if err!=nil||selected!=nil{t.Fatalf("stable must ignore preview: %+v %v",selected,err)}
  if selected,err=chooseUpdate([]updateRelease{broken},"3.1.0");selected!=nil||err==nil{t.Fatal("invalid package accepted")}
+}
+
+func TestActiveMessageBlocksUpdate(t *testing.T){
+ core,err:=NewCore(t.TempDir());if err!=nil{t.Fatal(err)}
+ err=core.store.Update(func(st *internal.State)error{
+  st.Jobs=append(st.Jobs,internal.Job{ID:"active",State:"sending"})
+  return nil
+ });if err!=nil{t.Fatal(err)}
+ if core.CanInstallUpdate()==nil{t.Fatal("active Codex request did not block update")}
+ err=core.store.Update(func(st *internal.State)error{st.Jobs[0].State="completed";return nil});if err!=nil{t.Fatal(err)}
+ if err=core.CanInstallUpdate();err!=nil{t.Fatal(err)}
 }

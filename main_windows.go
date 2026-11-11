@@ -459,6 +459,8 @@ func (g *GUI) setPage(p int) {
 	call(u32, "InvalidateRect", g.hwnd, 0, 1)
 }
 func (g *GUI) refreshSessions() {
+ previousID:=""
+ if g.selected>=0&&g.selected<len(g.visible){previousID=g.visible[g.selected].ID}
 	search := strings.ToLower(strings.TrimSpace(gettext(g.ctl(ID_SEARCH))))
 	all := g.core.Snapshot()
 	g.sessions = all
@@ -472,7 +474,15 @@ func (g *GUI) refreshSessions() {
 		g.visible = g.visible[:5000]
 	}
 	send(g.ctl(ID_SESSLIST), LVM_SETITEMCOUNT, uintptr(len(g.visible)), 0)
-	g.selected = -1
+	g.selected=-1
+ for idx,item:=range g.visible{
+  if item.ID==previousID{
+   g.selected=idx
+   state:=LVITEMW{StateMask:3,State:3}
+   send(g.ctl(ID_SESSLIST),LVM_FIRST+43,uintptr(idx),uintptr(unsafe.Pointer(&state)))
+   break
+  }
+ }
 	call(u32, "InvalidateRect", g.ctl(ID_SESSLIST), 0, 1)
 	call(u32, "InvalidateRect", g.hwnd, 0, 1)
 }
@@ -695,6 +705,7 @@ func (g *GUI) draw(hdc uintptr) {
 	fill(hdc, RECT{0, 0, 208, g.H}, p.side)
 	drawText(hdc, "◈", RECT{25, 26, 65, 64}, p.accent, g.bold, DT_SINGLELINE|DT_VCENTER)
 	drawText(hdc, "Codex Queue", RECT{58, 28, 199, 56}, p.text, g.bold, DT_SINGLELINE|DT_VCENTER)
+	fill(hdc,RECT{19,94,189,95},p.border)
 	drawText(hdc, "STUDIO  " + AppVersion + "  · PREVIEW", RECT{26, 65, 180, 91}, p.muted, g.small, DT_SINGLELINE)
 	title := "세션 탐색기"
 	sub := "Codex 작업 세션만 표시 · ChatGPT 일반 채팅 및 하위 에이전트 제외"
@@ -720,8 +731,10 @@ func (g *GUI) draw(hdc uintptr) {
 		}
 		xr := x + left + 18
 		right := area - left - 18
-		roundBox(hdc, RECT{x - 6, 165, x + left + 6, g.H - 36}, p.card)
-		roundBox(hdc, RECT{xr - 6, 165, xr + right + 6, g.H - 36}, p.card)
+		roundBox(hdc, RECT{x - 6, 165, x + left + 6, g.H - 36}, p.border)
+		roundBox(hdc, RECT{x - 5, 166, x + left + 5, g.H - 37}, p.card)
+		roundBox(hdc, RECT{xr - 6, 165, xr + right + 6, g.H - 36}, p.border)
+		roundBox(hdc, RECT{xr - 5, 166, xr + right + 5, g.H - 37}, p.card)
 		drawText(hdc, fmt.Sprintf("세션 %d개 / 검색 결과 %d개", len(g.sessions), len(g.visible)), RECT{x + 6, 110, x + left, 130}, p.muted, g.small, DT_SINGLELINE)
 		heading := "세션을 선택하세요"
 		if s, ok := g.selectedSession(); ok {
@@ -732,20 +745,22 @@ func (g *GUI) draw(hdc uintptr) {
 		drawText(hdc, "예약할 메시지", RECT{xr + 4, g.H - 276, xr + right, g.H - 250}, p.text, g.font, DT_SINGLELINE)
 		drawText(hdc, "예약 날짜와 시간", RECT{xr + 4, g.H - 141, xr + right, g.H - 114}, p.muted, g.small, DT_SINGLELINE)
 	case 1:
-		roundBox(hdc, RECT{226, 123, g.W - 16, g.H - 115}, p.card)
+		roundBox(hdc, RECT{226, 123, g.W - 16, g.H - 115}, p.border)
+		roundBox(hdc, RECT{227, 124, g.W - 17, g.H - 116}, p.card)
 		drawText(hdc, "취소는 대기 상태에서만 가능합니다. 실행 상태가 불명확하면 자동 재전송하지 않습니다.", RECT{245, g.H - 111, g.W - 190, g.H - 84}, p.muted, g.small, DT_SINGLELINE)
 	case 2:
-		roundBox(hdc, RECT{226, 127, g.W - 16, g.H - 54}, p.card)
+		roundBox(hdc, RECT{226, 127, g.W - 16, g.H - 54}, p.border)
+		roundBox(hdc, RECT{227, 128, g.W - 17, g.H - 55}, p.card)
 		drawText(hdc, "Codex 홈 디렉터리", RECT{254, 144, g.W - 30, 173}, p.text, g.bold, DT_SINGLELINE)
 		drawText(hdc, "Codex Desktop과 CLI의 로컬 세션 데이터를 이 폴더에서 조회합니다.", RECT{254, 279, g.W - 30, 312}, p.muted, g.font, DT_SINGLELINE)
 		drawText(hdc, "Codex 실행 엔진 및 프로그램 업데이트", RECT{254, 310, g.W - 30, 344}, p.text, g.bold, DT_SINGLELINE)
 		badge := "Codex 엔진 미설치 · 별도 CLI 설치 불필요"
 		if g.core.EnginePresent() {
-			badge = "내장 Codex 엔진 설치됨 · 별도 CLI 설치 불필요"
+			badge = "공식 Codex 엔진 준비됨 · 별도 CLI 설치 불필요"
 		}
 		drawText(hdc, badge, RECT{254, 404, g.W - 20, 439}, p.muted, g.font, DT_SINGLELINE)
 		drawText(hdc, "엔진은 OpenAI 공식 GitHub 릴리스에서 내려받고 SHA-256을 검증합니다.", RECT{254, 447, g.W - 20, 482}, p.muted, g.font, DT_SINGLELINE)
-		drawText(hdc, "업데이트는 검증 후 사용자가 설치를 승인해야 적용됩니다.", RECT{254, 488, g.W - 20, 520}, p.muted, g.font, DT_SINGLELINE)
+		drawText(hdc, "업데이트는 SHA-256 검증과 실행 확인을 마친 뒤 적용됩니다.", RECT{254, 488, g.W - 20, 520}, p.muted, g.font, DT_SINGLELINE)
 	}
 }
 func (g *GUI) drawButton(dis *DRAWITEMSTRUCT) {
@@ -958,6 +973,7 @@ func (g *GUI) removeTray() {
 	g.tray = false
 }
 func (g *GUI) applyUpdate(target string) {
+ if err:=g.core.CanInstallUpdate();err!=nil{g.alert(err.Error());return}
 	exe, err := os.Executable()
 	if err != nil {
 		g.alert(err.Error())
