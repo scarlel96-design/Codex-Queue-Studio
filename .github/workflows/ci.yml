@@ -24,8 +24,14 @@ jobs:
       - name: Windows unit test
         run: go test ./...
         if: matrix.os == 'windows-latest'
-      - name: Static analysis
+      - name: Static analysis on Linux
+        if: matrix.os == 'ubuntu-latest'
         run: go vet ./...
+      - name: Static analysis on Windows
+        if: matrix.os == 'windows-latest'
+        # Win32 LPARAM is a borrowed native pointer in the window procedure.
+        # All other Go vet analyzers remain enabled.
+        run: go vet -unsafeptr=false ./...
       - name: Compile native Windows GUI
         if: matrix.os == 'windows-latest'
         shell: pwsh
