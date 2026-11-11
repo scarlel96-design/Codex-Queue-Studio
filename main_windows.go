@@ -761,7 +761,7 @@ func (g *GUI) drawButton(dis *DRAWITEMSTRUCT) {
 		bg = p.border
 	}
 	roundBox(hdc, RECT{2, 2, dis.Rect.Right - dis.Rect.Left - 2, dis.Rect.Bottom - dis.Rect.Top - 2}, bg)
-	labels := map[int]string{ID_SESSIONS: "세션 탐색기", ID_JOBS: "예약 관리", ID_SETTINGS: "환경 설정", ID_THEME: "◐   테마 전환", ID_REFRESH: "새로고침", ID_SENDNOW: "지금 전송", ID_SCHEDULE: "예약 등록", ID_CANCEL: "예약 취소", ID_ENGINE: "Codex 엔진 설치", ID_CHECK: "업데이트 확인", ID_UPDATE: "업데이트 설치", ID_SAVE: "경로 적용", ID_EXIT: "완전히 종료"}
+	labels := map[int]string{ID_SESSIONS: "세션 탐색기", ID_JOBS: "예약 관리", ID_SETTINGS: "환경 설정", ID_THEME: "◐   테마 전환", ID_REFRESH: "새로고침", ID_SENDNOW: "지금 전송", ID_SCHEDULE: "예약 등록", ID_CANCEL: "예약 취소", ID_REACTIVATE: "선택 예약 재개", ID_ENGINE: "Codex 엔진 설치", ID_CHECK: "업데이트 확인", ID_UPDATE: "업데이트 설치", ID_SAVE: "경로 적용", ID_EXIT: "완전히 종료"}
 	text := labels[id]
 	r := RECT{7, 0, dis.Rect.Right - dis.Rect.Left - 7, dis.Rect.Bottom - dis.Rect.Top}
 	drawText(hdc, text, r, fg, g.font, DT_CENTER|DT_SINGLELINE|DT_VCENTER)
@@ -841,6 +841,15 @@ func mainWndProc(hwnd, msg, w, l uintptr) uintptr {
 		return 0
 	case WM_ERASEBKGND:
 		return 1
+	case WM_SETTINGCHANGE:
+		if g.core.store.Snapshot().Settings.Theme == "system" {
+			dark := systemDark()
+			if g.dark != dark {
+				g.dark = dark
+				g.updateColors()
+			}
+		}
+		return 0
 	case WM_PAINT:
 		var ps PAINTSTRUCT
 		hdc := call(u32, "BeginPaint", hwnd, uintptr(unsafe.Pointer(&ps)))
