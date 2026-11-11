@@ -310,6 +310,9 @@ func (s AppServer) Send(ctx context.Context, id, message string) (string, error)
 			return "", ctx.Err()
 		case ev, ok := <-p.lines:
 			if !ok {
+				if started {
+					return "accepted; completion unknown", fmt.Errorf("Codex 서버가 요청 수락 후 종료되었습니다: %s", clipLine(p.stderr.String(), 300))
+				}
 				return "", fmt.Errorf("Codex 서버 종료: %s", clipLine(p.stderr.String(), 300))
 			}
 			if string(ev.ID) == "3" {
