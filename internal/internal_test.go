@@ -13,7 +13,7 @@ import (
 )
 
 func TestMain(m *testing.M) {
-	if os.Getenv("CODEX_QUEUE_FAKE_RPC") == "1" {
+	if os.Getenv("CODEX_QUEUE_FAKE_RPC") != "" {
 		fakeServer()
 		os.Exit(0)
 	}
@@ -47,6 +47,9 @@ func fakeServer() {
 		fmt.Fprintln(w, string(data))
 		w.Flush()
 		if v.Method == "turn/start" {
+			if os.Getenv("CODEX_QUEUE_FAKE_RPC") == "drop" {
+				return
+			}
 			fmt.Fprintln(w, `{"method":"turn/completed","params":{"turn":{"id":"turn-test","status":"completed"}}}`)
 			w.Flush()
 		}
@@ -134,6 +137,17 @@ func TestAppServerSendAndListMock(t *testing.T) {
 		t.Fatalf("unexpected out %q", out)
 	}
 }
+func TestAppServerDisconnectAfterAcceptanceIsUncertain(t *testing.T) {
+	t.Setenv("CODEX_QUEUE_FAKE_RPC", "drop")
+	s := AppServer{Executable: os.Args[0], CodexHome: t.TempDir()}
+	ctx, cancel := context.WithTimeout(context.Background(), 6*time.Second)
+	defer cancel()
+	detail, err := s.Send(ctx, "11111111-1111-1111-1111-111111111111", "Check status")
+	if err == nil || !strings.Contains(detail, "completion unknown") {
+		t.Fatalf("accepted turn must be uncertain, detail=%q err=%v", detail, err)
+	}
+}
+
 func TestCrashRecovery(t *testing.T) {
 	path := filepath.Join(t.TempDir(), "state.json")
 	s, err := NewStore(path, Settings{CodexHome: "/tmp"})
