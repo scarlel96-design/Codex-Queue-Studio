@@ -1019,7 +1019,7 @@ func main() {
 	g := &GUI{core: core, page: 0, W: 1350, H: 870, selected: -1}
 	theme := core.store.Snapshot().Settings.Theme
 	g.dark = theme == "dark" || (theme == "system" && systemDark())
-	g.pal = palette(false)
+	g.pal = palette(g.dark)
 	gui = g
 	icc := INITCOMMONCONTROLSEX{Size: uint32(unsafe.Sizeof(INITCOMMONCONTROLSEX{})), ICC: 0x101}
 	call(c32, "InitCommonControlsEx", uintptr(unsafe.Pointer(&icc)))
