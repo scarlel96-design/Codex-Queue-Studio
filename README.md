@@ -87,7 +87,7 @@ updater helper itself, reinstall the full release ZIP.
 
 ## Verification
 
-Run `go test ./...` and check `docs/VERIFICATION.md`.
+Run `go test ./...` and check `docs/VERIFICATION.md`. CI validates both Windows and Ubuntu.
 The current non-Windows build environment can cross-compile Windows PE binaries.
 It cannot verify actual GUI rendering or a live Codex Desktop session.
 A successful simulated App Server test is not proof of live server compatibility.
