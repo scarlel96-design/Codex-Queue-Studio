@@ -9,6 +9,7 @@ import (
 	"os"
 	"os/exec"
 	"path/filepath"
+	"runtime"
 	"strconv"
 	"strings"
 	"sync/atomic"
@@ -812,7 +813,7 @@ func (g *GUI) notify(l uintptr) {
 			}
 		}
 		if int(hdr.IDFrom) == ID_JOBLIST {
-			jobs := g.core.Pending()
+			jobs := g.jobs
 			if idx < 0 || idx >= len(jobs) {
 				return
 			}
@@ -852,7 +853,11 @@ func mainWndProc(hwnd, msg, w, l uintptr) uintptr {
 	case WM_CREATE:
 		g.hwnd = hwnd
 		g.initControls()
-		g.asyncRefresh()
+		if !hasFlag("--safe-mode") && !hasFlag("--ui-smoke-test") {
+			g.asyncRefresh()
+		} else if hasFlag("--safe-mode") {
+			g.core.setStatus("안전 모드: 자동 세션 검색을 건너뛰었습니다")
+		}
 		return 0
 	case WM_GETMINMAXINFO:
 		m := (*MINMAXINFO)(unsafe.Pointer(l))
@@ -899,6 +904,11 @@ func mainWndProc(hwnd, msg, w, l uintptr) uintptr {
 		g.notify(l)
 		return 0
 	case WM_TIMER:
+		if w == 9901 && hasFlag("--ui-smoke-test") {
+			g.quitting = true
+			call(u32, "DestroyWindow", hwnd)
+			return 0
+		}
 		if w == 1 {
 			if g.page == 1 {
 				g.refreshJobs()
@@ -1023,7 +1033,19 @@ func systemDark() bool {
 	}
 	return data[0] == 0 && data[1] == 0 && data[2] == 0 && data[3] == 0
 }
+func hasFlag(flag string) bool {
+	for _, arg := range os.Args[1:] {
+		if arg == flag {
+			return true
+		}
+	}
+	return false
+}
+
 func main() {
+	// Keep the window and Win32 message pump on the same OS thread.
+	runtime.LockOSThread()
+	defer runtime.UnlockOSThread()
 	mutex := call(k32, "CreateMutexW", 0, 0, strptr("Local\\CodexQueueStudioNativeV3"))
 	if mutex == 0 {
 		showFatal("단일 실행 잠금 생성에 실패했습니다.")
@@ -1074,8 +1096,14 @@ func main() {
 	g.hwnd = hwnd
 	send(hwnd, WM_SETICON, 1, g.icon)
 	send(hwnd, WM_SETICON, 0, g.icon)
-	core.Run()
-	call(u32, "SetTimer", hwnd, 1, 4000, 0)
+	if hasFlag("--ui-smoke-test") {
+		// No network, session scan or scheduled delivery in a smoke test.
+		call(u32, "SetTimer", hwnd, 9901, 350, 0)
+	} else {
+		core.Run()
+		call(u32, "SetTimer", hwnd, 1, 4000, 0)
+	}
+	if !hasFlag("--ui-smoke-test") {
 	go func() {
 		for {
 			ctx, cancel := context.WithTimeout(context.Background(), 20*time.Second)
@@ -1092,6 +1120,7 @@ func main() {
 			}
 		}
 	}()
+	}
 	var msg MSG
 	for call(u32, "GetMessageW", uintptr(unsafe.Pointer(&msg)), 0, 0, 0) != 0 {
 		call(u32, "TranslateMessage", uintptr(unsafe.Pointer(&msg)))

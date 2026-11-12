@@ -20,3 +20,11 @@
 - Successful GitHub Release publication with exactly two ZIP assets.
 
 Release gate: Do not tag a production release until these high-risk acceptance checks pass.
+
+## Windows UI thread hang regression
+
+- A suspected cause of launch-time 'Not Responding' was identified: the Win32 window and GetMessageW loop were not explicitly pinned to one OS thread.
+- The native entry point now calls runtime.LockOSThread before window and message-loop initialization.
+- --ui-smoke-test creates the real Win32 GUI, skips network and scheduled sends, and exits from a WM_TIMER callback.
+- Windows CI must complete this smoke test within 15 seconds. This still does not substitute for a user-PC test.
+- --safe-mode skips automatic session loading while retaining scheduled delivery. Do not delete state.json to troubleshoot UI responsiveness.

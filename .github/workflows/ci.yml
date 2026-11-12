@@ -42,6 +42,26 @@ jobs:
           go build -ldflags "-H windowsgui -s -w" -o CodexQueueUpdater.exe ./cmd/updater
           if (!(Test-Path CodexQueueStudio.exe)) { throw 'Native GUI build missing' }
           if (!(Test-Path CodexQueueUpdater.exe)) { throw 'Updater build missing' }
+      - name: Native window responsiveness smoke test
+        if: matrix.os == 'windows-latest'
+        shell: pwsh
+        run: |
+          $ErrorActionPreference = 'Stop'
+          $sandbox = Join-Path $env:RUNNER_TEMP "cqs-ui-smoke"
+          New-Item -ItemType Directory -Force -Path $sandbox | Out-Null
+          $env:LOCALAPPDATA = $sandbox
+          $process = Start-Process -FilePath (Resolve-Path './CodexQueueStudio.exe') -ArgumentList '--ui-smoke-test' -PassThru
+          try {
+            if (!$process.WaitForExit(15000)) {
+              $process.Kill()
+              throw 'Win32 window did not process WM_TIMER and exit within 15 seconds'
+            }
+            if ($process.ExitCode -ne 0) {
+              throw "Native window exited with code $($process.ExitCode)"
+            }
+          } finally {
+            if (!$process.HasExited) { $process.Kill() }
+          }
       - name: Upload Windows build artifact
         if: matrix.os == 'windows-latest'
         uses: actions/upload-artifact@v4
