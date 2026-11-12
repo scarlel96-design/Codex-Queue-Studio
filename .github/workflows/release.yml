@@ -107,7 +107,8 @@ jobs:
           $release = gh api "repos/$env:GITHUB_REPOSITORY/releases/tags/$env:RELEASE_TAG" | ConvertFrom-Json
           if ($LASTEXITCODE -ne 0) { throw 'GitHub release lookup failed' }
           $names = @($release.assets | ForEach-Object { $_.name } | Sort-Object)
-          if (($names -join ',') -ne 'CodexQueueStudio-Windows-x64.zip,CodexQueueStudio-update-Windows-x64.zip') { throw 'Incorrect release asset list' }
+          $expected = @('CodexQueueStudio-Windows-x64.zip','CodexQueueStudio-update-Windows-x64.zip')
+          if ($names.Count -ne 2 -or @(Compare-Object -ReferenceObject $expected -DifferenceObject $names).Count -ne 0) { throw 'Incorrect release asset list' }
           foreach ($asset in $release.assets) {
             if ($asset.size -lt 100000 -or !$asset.digest -or !$asset.digest.StartsWith('sha256:')) { throw 'Release asset SHA-256 missing' }
           }
