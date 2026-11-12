@@ -12,6 +12,7 @@ import (
 	"runtime"
 	"strconv"
 	"strings"
+	"sync"
 	"sync/atomic"
 	"syscall"
 	"time"
@@ -49,9 +50,9 @@ const (
 	LVM_SETTEXTBKCOLOR           = LVM_FIRST + 38
 	LVS_EX_FULLROWSELECT         = 0x20
 	LVS_EX_DOUBLEBUFFER          = 0x10000
-	LVS_EX_LABELTIP = 0x4000
-	LVM_SETCOLUMNWIDTH = LVM_FIRST + 30
-	EM_SETCUEBANNER = 0x1501
+	LVS_EX_LABELTIP              = 0x4000
+	LVM_SETCOLUMNWIDTH           = LVM_FIRST + 30
+	EM_SETCUEBANNER              = 0x1501
 	WM_CREATE                    = 1
 	WM_DESTROY                   = 2
 	WM_SIZE                      = 5
@@ -115,6 +116,8 @@ const (
 	ID_DATE                      = 121
 	ID_TIME                      = 122
 	ID_REACTIVATE                = 123
+	ID_RELEASE_NOTES             = 124
+	EM_SETREADONLY               = 0x00CF
 )
 
 type RECT struct{ Left, Top, Right, Bottom int32 }
@@ -210,9 +213,9 @@ func signed(v int32) uintptr    { return uintptr(uint64(int64(v))) }
 func rgb(r, g, b uint32) uint32 { return r | (g << 8) | (b << 16) }
 func palette(dark bool) Palette {
 	if dark {
-		return Palette{rgb(17, 21, 29), rgb(24, 30, 41), rgb(33, 41, 54), rgb(30, 38, 50), rgb(239, 243, 251), rgb(160, 173, 193), rgb(41, 108, 199), rgb(255, 255, 255), rgb(59, 70, 85)}
+		return Palette{rgb(14, 18, 27), rgb(21, 26, 38), rgb(30, 37, 51), rgb(25, 32, 45), rgb(242, 246, 252), rgb(151, 165, 187), rgb(67, 129, 233), rgb(255, 255, 255), rgb(53, 64, 82)}
 	}
-	return Palette{rgb(243, 246, 251), rgb(231, 237, 247), rgb(255, 255, 255), rgb(250, 252, 255), rgb(31, 44, 66), rgb(93, 111, 136), rgb(33, 112, 223), rgb(255, 255, 255), rgb(210, 221, 235)}
+	return Palette{rgb(246, 248, 252), rgb(239, 243, 250), rgb(255, 255, 255), rgb(250, 251, 254), rgb(27, 41, 63), rgb(108, 122, 146), rgb(43, 109, 216), rgb(255, 255, 255), rgb(220, 227, 238)}
 }
 
 var u32 = syscall.NewLazyDLL("user32.dll")
@@ -274,7 +277,7 @@ func roundBox(hdc uintptr, r RECT, c uint32) {
 	p := call(g32, "CreatePen", 0, 1, uintptr(c))
 	ob := call(g32, "SelectObject", hdc, b)
 	op := call(g32, "SelectObject", hdc, p)
-	call(g32, "RoundRect", hdc, uintptr(r.Left), uintptr(r.Top), uintptr(r.Right), uintptr(r.Bottom), 16, 16)
+	call(g32, "RoundRect", hdc, uintptr(r.Left), uintptr(r.Top), uintptr(r.Right), uintptr(r.Bottom), 22, 22)
 	call(g32, "SelectObject", hdc, ob)
 	call(g32, "SelectObject", hdc, op)
 	call(g32, "DeleteObject", b)
@@ -287,6 +290,7 @@ type GUI struct {
 	core                           *Core
 	hwnd                           uintptr
 	font, small, bold, icon        uintptr
+	heading, micro                 uintptr
 	dark                           bool
 	page                           int
 	W, H                           int32
@@ -304,6 +308,9 @@ type GUI struct {
 	brushCard, brushField, brushBG uintptr
 	tray                           bool
 	quitting                       bool
+	updateMu                       sync.Mutex
+	updateView                     updateDisplay
+	healthyTicks                   int
 }
 
 func (g *GUI) ctl(id int) uintptr { return g.controls[id] }
@@ -342,7 +349,7 @@ func (g *GUI) initControls() {
 		g.button(b.id, b.title)
 	}
 	g.edit(ID_SEARCH, false)
- send(g.ctl(ID_SEARCH), EM_SETCUEBANNER, 0, strptr("Codex 작업 세션 검색"))
+	send(g.ctl(ID_SEARCH), EM_SETCUEBANNER, 0, strptr("Codex 작업 세션 검색"))
 	g.edit(ID_HISTORY, true)
 	g.edit(ID_MESSAGE, true)
 	g.add(ID_DATE, "SysDateTimePick32", "", WS_TABSTOP)
@@ -350,6 +357,10 @@ func (g *GUI) initControls() {
 	send(g.ctl(ID_DATE), DTM_SETFORMATW, 0, strptr("yyyy-MM-dd"))
 	send(g.ctl(ID_TIME), DTM_SETFORMATW, 0, strptr("HH:mm"))
 	g.edit(ID_HOMEPATH, false)
+	g.edit(ID_RELEASE_NOTES, true)
+	send(g.ctl(ID_RELEASE_NOTES), EM_SETREADONLY, 1, 0)
+	settext(g.ctl(ID_RELEASE_NOTES), "업데이트를 확인하면 이 영역에 공식 릴리스 변경 내역이 표시됩니다.")
+	setFont(g.ctl(ID_RELEASE_NOTES), g.font)
 	g.list(ID_SESSLIST, []struct {
 		title string
 		width int32
@@ -382,6 +393,8 @@ func (g *GUI) updateColors() {
 		dark = 1
 	}
 	call(dwm, "DwmSetWindowAttribute", g.hwnd, 20, uintptr(unsafe.Pointer(&dark)), unsafe.Sizeof(uint32(0)))
+	corners := uint32(2) // DWMWCP_ROUND; Windows 11 preserves native caption buttons.
+	call(dwm, "DwmSetWindowAttribute", g.hwnd, 33, uintptr(unsafe.Pointer(&corners)), unsafe.Sizeof(corners))
 	for _, id := range []int{ID_SESSLIST, ID_JOBLIST} {
 		h := g.ctl(id)
 		send(h, LVM_SETTEXTCOLOR, 0, uintptr(g.pal.text))
@@ -392,11 +405,11 @@ func (g *GUI) updateColors() {
 }
 func (g *GUI) layout() {
 	w, h := g.W, g.H
-	if w < 1190 {
-		w = 1190
+	if w < 800 {
+		w = 800
 	}
-	if h < 720 {
-		h = 720
+	if h < 580 {
+		h = 580
 	}
 	g.W = w
 	g.H = h
@@ -408,7 +421,7 @@ func (g *GUI) layout() {
 	}
 	move(g.ctl(ID_THEME), 14, h-130, 180, 38)
 	move(g.ctl(ID_EXIT), 14, h-78, 180, 38)
-	all := []int{ID_SEARCH, ID_REFRESH, ID_SESSLIST, ID_HISTORY, ID_MESSAGE, ID_DATE, ID_TIME, ID_SENDNOW, ID_SCHEDULE, ID_JOBLIST, ID_CANCEL, ID_REACTIVATE, ID_ENGINE, ID_CHECK, ID_UPDATE, ID_HOMEPATH, ID_SAVE}
+	all := []int{ID_SEARCH, ID_REFRESH, ID_SESSLIST, ID_HISTORY, ID_MESSAGE, ID_DATE, ID_TIME, ID_SENDNOW, ID_SCHEDULE, ID_JOBLIST, ID_CANCEL, ID_REACTIVATE, ID_ENGINE, ID_CHECK, ID_UPDATE, ID_HOMEPATH, ID_SAVE, ID_RELEASE_NOTES}
 	for _, id := range all {
 		show(g.ctl(id), false)
 	}
@@ -422,7 +435,9 @@ func (g *GUI) layout() {
 		move(g.ctl(ID_SEARCH), x, 124, left-126, 35)
 		move(g.ctl(ID_REFRESH), x+left-116, 124, 116, 35)
 		move(g.ctl(ID_SESSLIST), x, 173, left, h-211)
- for i,ratio:=range []int32{45,21,16,18}{send(g.ctl(ID_SESSLIST),LVM_SETCOLUMNWIDTH,uintptr(i),uintptr(left*ratio/100))}
+		for i, ratio := range []int32{45, 21, 16, 18} {
+			send(g.ctl(ID_SESSLIST), LVM_SETCOLUMNWIDTH, uintptr(i), uintptr(left*ratio/100))
+		}
 		xr := x + left + 18
 		move(g.ctl(ID_HISTORY), xr, 236, right, h-538)
 		move(g.ctl(ID_MESSAGE), xr, h-251, right, 117)
@@ -441,17 +456,29 @@ func (g *GUI) layout() {
 		show(g.ctl(ID_CANCEL), true)
 		show(g.ctl(ID_REACTIVATE), true)
 	case 2:
-		move(g.ctl(ID_HOMEPATH), x+22, 176, area-44, 39)
-		move(g.ctl(ID_SAVE), x+22, 230, 170, 39)
-		move(g.ctl(ID_ENGINE), x+22, 343, 200, 41)
-		move(g.ctl(ID_CHECK), x+237, 343, 190, 41)
-		move(g.ctl(ID_UPDATE), x+442, 343, 190, 41)
-		for _, id := range []int{ID_HOMEPATH, ID_SAVE, ID_ENGINE, ID_CHECK, ID_UPDATE} {
+		// Separate the Codex data path from the software-update center.
+		margin := int32(22)
+		move(g.ctl(ID_HOMEPATH), x+margin, 178, area-238, 40)
+		move(g.ctl(ID_SAVE), x+area-193, 178, 171, 40)
+		move(g.ctl(ID_ENGINE), x+margin, 273, 213, 39)
+		move(g.ctl(ID_CHECK), x+margin, 377, 177, 39)
+		move(g.ctl(ID_UPDATE), x+212, 377, 185, 39)
+		notesHeight := h - int32(600)
+		if notesHeight < 75 {
+			notesHeight = 75
+		}
+		move(g.ctl(ID_RELEASE_NOTES), x+margin, 478, area-2*margin, notesHeight)
+		for _, id := range []int{ID_HOMEPATH, ID_SAVE, ID_ENGINE, ID_CHECK, ID_UPDATE, ID_RELEASE_NOTES} {
 			show(g.ctl(id), true)
 		}
 	}
 }
 func (g *GUI) setPage(p int) {
+	if p == 2 && !g.updateSnapshot().Busy {
+		if latest := g.core.UpdateAvailable(); latest != nil {
+			g.setUpdateView(updateDisplay{Phase: "설치 가능한 버전  ·  " + latest.Tag, Notes: prettyReleaseNotes(latest), Percent: 8})
+		}
+	}
 	g.page = p
 	g.layout()
 	if p == 1 {
@@ -460,8 +487,10 @@ func (g *GUI) setPage(p int) {
 	call(u32, "InvalidateRect", g.hwnd, 0, 1)
 }
 func (g *GUI) refreshSessions() {
- previousID:=""
- if g.selected>=0&&g.selected<len(g.visible){previousID=g.visible[g.selected].ID}
+	previousID := ""
+	if g.selected >= 0 && g.selected < len(g.visible) {
+		previousID = g.visible[g.selected].ID
+	}
 	search := strings.ToLower(strings.TrimSpace(gettext(g.ctl(ID_SEARCH))))
 	all := g.core.Snapshot()
 	g.sessions = all
@@ -475,15 +504,15 @@ func (g *GUI) refreshSessions() {
 		g.visible = g.visible[:5000]
 	}
 	send(g.ctl(ID_SESSLIST), LVM_SETITEMCOUNT, uintptr(len(g.visible)), 0)
-	g.selected=-1
- for idx,item:=range g.visible{
-  if item.ID==previousID{
-   g.selected=idx
-   state:=LVITEMW{StateMask:3,State:3}
-   send(g.ctl(ID_SESSLIST),LVM_FIRST+43,uintptr(idx),uintptr(unsafe.Pointer(&state)))
-   break
-  }
- }
+	g.selected = -1
+	for idx, item := range g.visible {
+		if item.ID == previousID {
+			g.selected = idx
+			state := LVITEMW{StateMask: 3, State: 3}
+			send(g.ctl(ID_SESSLIST), LVM_FIRST+43, uintptr(idx), uintptr(unsafe.Pointer(&state)))
+			break
+		}
+	}
 	call(u32, "InvalidateRect", g.ctl(ID_SESSLIST), 0, 1)
 	call(u32, "InvalidateRect", g.hwnd, 0, 1)
 }
@@ -643,18 +672,25 @@ func (g *GUI) handleButton(id int) {
 			call(u32, "PostMessageW", g.hwnd, WM_APP+1, 0, 0)
 		}()
 	case ID_CHECK:
+		state := g.updateSnapshot()
+		if state.Busy {
+			return
+		}
+		g.setUpdateView(updateDisplay{Busy: true, Phase: "GitHub 릴리스 확인 중", Percent: 3, Notes: "최신 배포 파일과 무결성 정보를 확인하고 있습니다."})
 		go func() {
-			ctx, cancel := context.WithTimeout(context.Background(), 20*time.Second)
+			ctx, cancel := context.WithTimeout(context.Background(), 25*time.Second)
 			defer cancel()
 			upd, err := g.core.CheckUpdate(ctx)
 			if err != nil {
-				g.core.setStatus(err.Error())
+				g.updateFailure(err)
+				g.core.setStatus("업데이트 조회 오류: " + err.Error())
 			} else if upd == nil {
-				g.core.setStatus("현재 설치 가능한 새 버전이 없습니다. (시험 및 정식 채널 확인)")
+				g.setUpdateView(updateDisplay{Phase: "최신 상태입니다", Notes: "새 릴리스가 없습니다. GitHub에 배포 파일이 게시되면 여기에서 변경 내역을 확인할 수 있습니다.", Percent: 100})
+				g.core.setStatus("현재 버전 " + AppVersion + " · 최신 상태")
 			} else {
-				g.core.setStatus("업데이트 발견: " + upd.Tag + " · 설치 전 무결성 검증")
+				g.setUpdateView(updateDisplay{Phase: "업데이트 준비 완료  ·  " + upd.Tag, Notes: prettyReleaseNotes(upd), Percent: 8})
+				g.core.setStatus("새 버전 " + upd.Tag + "의 공식 변경 내역을 확인하세요")
 			}
-			call(u32, "PostMessageW", g.hwnd, WM_APP+1, 0, 0)
 		}()
 	case ID_UPDATE:
 		upd := g.core.UpdateAvailable()
@@ -662,21 +698,30 @@ func (g *GUI) handleButton(id int) {
 			g.alert("먼저 업데이트를 확인하세요.")
 			return
 		}
-		if !g.ask("검증된 업데이트 " + upd.Tag + "를 설치할까요?") {
+		if g.updateSnapshot().Busy {
 			return
 		}
+		if err := g.core.CanInstallUpdate(); err != nil {
+			g.alert(err.Error())
+			return
+		}
+		if !g.ask("릴리스 변경 내역을 확인하셨나요?\n" + upd.Tag + " 설치를 시작합니다.") {
+			return
+		}
+		g.setUpdateView(updateDisplay{Busy: true, Phase: "업데이트 다운로드 준비", Percent: 0, Notes: prettyReleaseNotes(upd), Total: upd.Size})
 		go func() {
-			ctx, cancel := context.WithTimeout(context.Background(), 4*time.Minute)
+			ctx, cancel := context.WithTimeout(context.Background(), 6*time.Minute)
 			defer cancel()
-			path, err := g.core.DownloadUpdate(ctx, *upd)
+			path, err := g.core.DownloadUpdateProgress(ctx, *upd, g.updateProgress)
 			if err != nil {
+				g.updateFailure(err)
 				g.core.setStatus("업데이트 실패: " + err.Error())
-			} else {
-				g.core.mu.Lock()
-				g.updateTarget = path
-				g.core.mu.Unlock()
-				g.core.setStatus("업데이트 검증 완료. 재시작 준비 중")
+				return
 			}
+			g.core.mu.Lock()
+			g.updateTarget = path
+			g.core.mu.Unlock()
+			g.updateProgress("설치 프로그램 시작 및 안전한 재시작 준비", 94, upd.Size, upd.Size)
 			call(u32, "PostMessageW", g.hwnd, WM_APP+3, 0, 0)
 		}()
 	case ID_SAVE:
@@ -704,10 +749,12 @@ func (g *GUI) draw(hdc uintptr) {
 	p := g.pal
 	fill(hdc, RECT{0, 0, g.W, g.H}, p.bg)
 	fill(hdc, RECT{0, 0, 208, g.H}, p.side)
-	drawText(hdc, "◈", RECT{25, 26, 65, 64}, p.accent, g.bold, DT_SINGLELINE|DT_VCENTER)
-	drawText(hdc, "Codex Queue", RECT{58, 28, 199, 56}, p.text, g.bold, DT_SINGLELINE|DT_VCENTER)
-	fill(hdc,RECT{19,94,189,95},p.border)
-	drawText(hdc, "STUDIO  " + AppVersion + "  · PREVIEW", RECT{26, 65, 180, 91}, p.muted, g.small, DT_SINGLELINE)
+	fill(hdc, RECT{17, 101, 189, 102}, p.border)
+	roundBox(hdc, RECT{16, g.H - 166, 191, g.H - 152}, p.border)
+	roundBox(hdc, RECT{20, 24, 56, 59}, p.accent)
+	drawText(hdc, "C", RECT{22, 23, 54, 60}, p.accentText, g.bold, DT_CENTER|DT_VCENTER|DT_SINGLELINE)
+	drawText(hdc, "Codex Queue", RECT{67, 27, 204, 58}, p.text, g.font, DT_SINGLELINE|DT_VCENTER)
+	drawText(hdc, "STUDIO  ·  3.2.1", RECT{21, 70, 189, 94}, p.muted, g.micro, DT_SINGLELINE)
 	title := "세션 탐색기"
 	sub := "Codex 작업 세션만 표시 · ChatGPT 일반 채팅 및 하위 에이전트 제외"
 	if g.page == 1 {
@@ -715,13 +762,15 @@ func (g *GUI) draw(hdc uintptr) {
 		sub = "예약 실행 상태와 실패 이력을 관리합니다"
 	} else if g.page == 2 {
 		title = "환경 설정"
-		sub = "Codex 엔진 · GitHub Releases 시험 채널 · 예약 데이터 보호"
+		sub = "독립 Codex 엔진 · 업데이트 · 세션 경로"
 	}
-	roundBox(hdc, RECT{234, 19, 299, 23}, p.accent)
-	drawText(hdc, title, RECT{234, 28, g.W - 30, 65}, p.text, g.bold, DT_SINGLELINE)
-	drawText(hdc, sub, RECT{234, 74, g.W - 30, 105}, p.muted, g.font, DT_SINGLELINE)
+	drawText(hdc, title, RECT{234, 25, g.W - 30, 67}, p.text, g.heading, DT_SINGLELINE)
+	drawText(hdc, sub, RECT{234, 77, g.W - 30, 109}, p.muted, g.font, DT_SINGLELINE)
 	status := g.core.Status()
-	drawText(hdc, status, RECT{234, g.H - 30, g.W - 20, g.H - 9}, p.muted, g.small, DT_SINGLELINE|DT_END_ELLIPSIS)
+	// Status rail separates operational feedback from the main content.
+	fill(hdc, RECT{233, g.H - 39, g.W - 25, g.H - 38}, p.border)
+	roundBox(hdc, RECT{236, g.H - 26, 245, g.H - 17}, rgb(35, 171, 125))
+	drawText(hdc, status, RECT{253, g.H - 31, g.W - 24, g.H - 8}, p.muted, g.small, DT_SINGLELINE|DT_END_ELLIPSIS)
 	switch g.page {
 	case 0:
 		x := int32(233)
@@ -732,36 +781,22 @@ func (g *GUI) draw(hdc uintptr) {
 		}
 		xr := x + left + 18
 		right := area - left - 18
-		roundBox(hdc, RECT{x - 6, 165, x + left + 6, g.H - 36}, p.border)
-		roundBox(hdc, RECT{x - 5, 166, x + left + 5, g.H - 37}, p.card)
-		roundBox(hdc, RECT{xr - 6, 165, xr + right + 6, g.H - 36}, p.border)
-		roundBox(hdc, RECT{xr - 5, 166, xr + right + 5, g.H - 37}, p.card)
+		roundBox(hdc, RECT{x - 6, 165, x + left + 6, g.H - 36}, p.card)
+		roundBox(hdc, RECT{xr - 6, 165, xr + right + 6, g.H - 36}, p.card)
 		drawText(hdc, fmt.Sprintf("세션 %d개 / 검색 결과 %d개", len(g.sessions), len(g.visible)), RECT{x + 6, 110, x + left, 130}, p.muted, g.small, DT_SINGLELINE)
 		heading := "세션을 선택하세요"
 		if s, ok := g.selectedSession(); ok {
 			heading = s.Title
 		}
 		drawText(hdc, heading, RECT{xr + 7, 171, xr + right - 8, 204}, p.text, g.bold, DT_SINGLELINE|DT_END_ELLIPSIS)
-		drawText(hdc, "세션 대화 기록 · 저장된 제목 우선", RECT{xr + 4, 207, xr + right, 230}, p.muted, g.small, DT_SINGLELINE)
+		drawText(hdc, "세션 대화 기록  ·  저장된 제목 우선", RECT{xr + 4, 207, xr + right, 230}, p.muted, g.small, DT_SINGLELINE)
 		drawText(hdc, "예약할 메시지", RECT{xr + 4, g.H - 276, xr + right, g.H - 250}, p.text, g.font, DT_SINGLELINE)
 		drawText(hdc, "예약 날짜와 시간", RECT{xr + 4, g.H - 141, xr + right, g.H - 114}, p.muted, g.small, DT_SINGLELINE)
 	case 1:
-		roundBox(hdc, RECT{226, 123, g.W - 16, g.H - 115}, p.border)
-		roundBox(hdc, RECT{227, 124, g.W - 17, g.H - 116}, p.card)
+		roundBox(hdc, RECT{226, 123, g.W - 16, g.H - 115}, p.card)
 		drawText(hdc, "취소는 대기 상태에서만 가능합니다. 실행 상태가 불명확하면 자동 재전송하지 않습니다.", RECT{245, g.H - 111, g.W - 190, g.H - 84}, p.muted, g.small, DT_SINGLELINE)
 	case 2:
-		roundBox(hdc, RECT{226, 127, g.W - 16, g.H - 54}, p.border)
-		roundBox(hdc, RECT{227, 128, g.W - 17, g.H - 55}, p.card)
-		drawText(hdc, "Codex 홈 디렉터리", RECT{254, 144, g.W - 30, 173}, p.text, g.bold, DT_SINGLELINE)
-		drawText(hdc, "Codex Desktop과 CLI의 로컬 세션 데이터를 이 폴더에서 조회합니다.", RECT{254, 279, g.W - 30, 312}, p.muted, g.font, DT_SINGLELINE)
-		drawText(hdc, "Codex 실행 엔진 및 프로그램 업데이트", RECT{254, 310, g.W - 30, 344}, p.text, g.bold, DT_SINGLELINE)
-		badge := "Codex 엔진 미설치 · 별도 CLI 설치 불필요"
-		if g.core.EnginePresent() {
-			badge = "공식 Codex 엔진 준비됨 · 별도 CLI 설치 불필요"
-		}
-		drawText(hdc, badge, RECT{254, 404, g.W - 20, 439}, p.muted, g.font, DT_SINGLELINE)
-		drawText(hdc, "엔진은 OpenAI 공식 GitHub 릴리스에서 내려받고 SHA-256을 검증합니다.", RECT{254, 447, g.W - 20, 482}, p.muted, g.font, DT_SINGLELINE)
-		drawText(hdc, "업데이트는 SHA-256 검증과 실행 확인을 마친 뒤 적용됩니다.", RECT{254, 488, g.W - 20, 520}, p.muted, g.font, DT_SINGLELINE)
+		g.drawUpdateCenter(hdc)
 	}
 }
 func (g *GUI) drawButton(dis *DRAWITEMSTRUCT) {
@@ -771,19 +806,30 @@ func (g *GUI) drawButton(dis *DRAWITEMSTRUCT) {
 	selected := (id == ID_SESSIONS && g.page == 0) || (id == ID_JOBS && g.page == 1) || (id == ID_SETTINGS && g.page == 2)
 	bg := p.card
 	fg := p.text
-	if id == ID_SCHEDULE || id == ID_SENDNOW || id == ID_ENGINE || selected {
+	if id == ID_SCHEDULE || id == ID_SENDNOW || id == ID_UPDATE {
 		bg = p.accent
 		fg = p.accentText
+	}
+	if selected {
+		bg = p.field
+		fg = p.accent
 	}
 	if id == ID_EXIT {
 		bg = p.side
 		fg = p.muted
 	}
 	if dis.ItemState&0x1 != 0 {
-        bg=p.border
-        fg=p.text
-    }
+		bg = p.border
+		fg = p.text
+	}
+	if dis.ItemState&0x4 != 0 { // ODS_DISABLED
+		bg = p.field
+		fg = p.muted
+	}
 	roundBox(hdc, RECT{2, 2, dis.Rect.Right - dis.Rect.Left - 2, dis.Rect.Bottom - dis.Rect.Top - 2}, bg)
+	if selected {
+		roundBox(hdc, RECT{4, 8, 8, dis.Rect.Bottom - dis.Rect.Top - 8}, p.accent)
+	}
 	labels := map[int]string{ID_SESSIONS: "세션 탐색기", ID_JOBS: "예약 관리", ID_SETTINGS: "환경 설정", ID_THEME: "◐   테마 전환", ID_REFRESH: "새로고침", ID_SENDNOW: "지금 전송", ID_SCHEDULE: "예약 등록", ID_CANCEL: "예약 취소", ID_REACTIVATE: "선택 예약 재개", ID_ENGINE: "Codex 엔진 설치", ID_CHECK: "업데이트 확인", ID_UPDATE: "업데이트 설치", ID_SAVE: "경로 적용", ID_EXIT: "완전히 종료"}
 	text := labels[id]
 	r := RECT{7, 0, dis.Rect.Right - dis.Rect.Left - 7, dis.Rect.Bottom - dis.Rect.Top}
@@ -807,9 +853,9 @@ func (g *GUI) notify(l uintptr) {
 			case 1:
 				text = s.Project
 			case 2:
-                text = s.Source
-            case 3:
-                text = s.UpdatedAt.Local().Format("01-02 15:04")
+				text = s.Source
+			case 3:
+				text = s.UpdatedAt.Local().Format("01-02 15:04")
 			}
 		}
 		if int(hdr.IDFrom) == ID_JOBLIST {
@@ -861,7 +907,7 @@ func mainWndProc(hwnd, msg, w, l uintptr) uintptr {
 		return 0
 	case WM_GETMINMAXINFO:
 		m := (*MINMAXINFO)(unsafe.Pointer(l))
-		m.MinTrackSize = POINT{X: 1230, Y: 750}
+		m.MinTrackSize = POINT{X: 1180, Y: 690}
 		return 0
 	case WM_SIZE:
 		g.W = int32(l & 0xFFFF)
@@ -891,7 +937,7 @@ func mainWndProc(hwnd, msg, w, l uintptr) uintptr {
 	case WM_CTLCOLOREDIT, WM_CTLCOLORSTATIC:
 		call(g32, "SetTextColor", w, uintptr(g.pal.text))
 		call(g32, "SetBkColor", w, uintptr(g.pal.field))
-        return g.brushField
+		return g.brushField
 	case WM_COMMAND:
 		id := int(w & 0xFFFF)
 		if id == ID_SEARCH && (w>>16)&0xFFFF == EN_CHANGE {
@@ -904,6 +950,19 @@ func mainWndProc(hwnd, msg, w, l uintptr) uintptr {
 		g.notify(l)
 		return 0
 	case WM_TIMER:
+		if w == 9902 && !hasFlag("--ui-smoke-test") {
+			g.healthyTicks++
+			if g.healthyTicks >= 6 {
+				call(u32, "KillTimer", hwnd, 9902)
+				path, token := updateHealthArgs()
+				if path != "" && token != "" {
+					// The marker is written by a timer running on the Win32 UI thread.
+					// A created window alone is not evidence that messages are processed.
+					_ = os.WriteFile(path, []byte(token+"\n"+strconv.Itoa(os.Getpid())), 0600)
+				}
+			}
+			return 0
+		}
 		if w == 9901 && hasFlag("--ui-smoke-test") {
 			g.quitting = true
 			call(u32, "DestroyWindow", hwnd)
@@ -927,6 +986,22 @@ func mainWndProc(hwnd, msg, w, l uintptr) uintptr {
 		g.core.mu.Unlock()
 		settext(g.ctl(ID_HISTORY), t)
 		return 0
+	case WM_APP + 4:
+		state := g.updateSnapshot()
+		if state.Notes != "" && gettext(g.ctl(ID_RELEASE_NOTES)) != state.Notes {
+			settext(g.ctl(ID_RELEASE_NOTES), state.Notes)
+		}
+		enabled := uintptr(1)
+		if state.Busy {
+			enabled = 0
+		}
+		call(u32, "EnableWindow", g.ctl(ID_CHECK), enabled)
+		if g.core.UpdateAvailable() == nil || state.Busy {
+			enabled = 0
+		}
+		call(u32, "EnableWindow", g.ctl(ID_UPDATE), enabled)
+		call(u32, "InvalidateRect", hwnd, 0, 1)
+		return 0
 	case WM_APP + 3:
 		g.core.mu.Lock()
 		target := g.updateTarget
@@ -934,7 +1009,7 @@ func mainWndProc(hwnd, msg, w, l uintptr) uintptr {
 		if target != "" {
 			g.applyUpdate(target)
 		} else {
-			g.alert(g.core.Status())
+			g.setUpdateView(updateDisplay{Phase: g.core.Status(), Percent: 0})
 		}
 		return 0
 	case WM_TRAY:
@@ -983,7 +1058,6 @@ func (g *GUI) removeTray() {
 	g.tray = false
 }
 func (g *GUI) applyUpdate(target string) {
- if err:=g.core.CanInstallUpdate();err!=nil{g.alert(err.Error());return}
 	exe, err := os.Executable()
 	if err != nil {
 		g.alert(err.Error())
@@ -994,9 +1068,10 @@ func (g *GUI) applyUpdate(target string) {
 		g.alert("업데이터가 없어 자동 업데이트를 진행할 수 없습니다. ZIP 릴리스를 다시 설치하세요.")
 		return
 	}
+	g.updateProgress("업데이터 실행 · 화면 전환 준비", 96, 0, 0)
 	cmd := exec.Command(helper, "--wait-pid", strconv.Itoa(os.Getpid()), "--target", exe, "--source", target)
 	if err = cmd.Start(); err != nil {
-		g.alert(err.Error())
+		g.updateFailure(err)
 		return
 	}
 	_ = cmd.Process.Release()
@@ -1004,10 +1079,13 @@ func (g *GUI) applyUpdate(target string) {
 	call(u32, "DestroyWindow", g.hwnd)
 }
 func loadIcon(root string) uintptr {
-	h:=call(u32,"LoadImageW",call(k32,"GetModuleHandleW",0),1,IMAGE_ICON,0,0,LR_DEFAULTSIZE)
- if h!=0{return h}
- _ = os.MkdirAll(root, 0700)
- p := filepath.Join(root, "studio.ico")
+	// Use the executable resource first. It also supplies Explorer/taskbar artwork.
+	h := call(u32, "LoadImageW", call(k32, "GetModuleHandleW", 0), 1, IMAGE_ICON, 0, 0, LR_DEFAULTSIZE)
+	if h != 0 {
+		return h
+	}
+	_ = os.MkdirAll(root, 0700)
+	p := filepath.Join(root, "studio.ico")
 	_ = os.WriteFile(p, iconBytes, 0600)
 	return call(u32, "LoadImageW", 0, strptr(p), IMAGE_ICON, 0, 0, LR_LOADFROMFILE|LR_DEFAULTSIZE)
 }
@@ -1033,6 +1111,17 @@ func systemDark() bool {
 	}
 	return data[0] == 0 && data[1] == 0 && data[2] == 0 && data[3] == 0
 }
+func updateHealthArgs() (path, token string) {
+	for i := 1; i+1 < len(os.Args); i++ {
+		switch os.Args[i] {
+		case "--post-update-health-file":
+			path = os.Args[i+1]
+		case "--post-update-health-nonce":
+			token = os.Args[i+1]
+		}
+	}
+	return
+}
 func hasFlag(flag string) bool {
 	for _, arg := range os.Args[1:] {
 		if arg == flag {
@@ -1043,7 +1132,7 @@ func hasFlag(flag string) bool {
 }
 
 func main() {
-	// Keep the window and Win32 message pump on the same OS thread.
+	// Win32 windows and their message loop must run on the same OS thread.
 	runtime.LockOSThread()
 	defer runtime.UnlockOSThread()
 	mutex := call(k32, "CreateMutexW", 0, 0, strptr("Local\\CodexQueueStudioNativeV3"))
@@ -1078,9 +1167,11 @@ func main() {
 	gui = g
 	icc := INITCOMMONCONTROLSEX{Size: uint32(unsafe.Sizeof(INITCOMMONCONTROLSEX{})), ICC: 0x101}
 	call(c32, "InitCommonControlsEx", uintptr(unsafe.Pointer(&icc)))
-	g.font = call(g32, "CreateFontW", signed(-18), 0, 0, 0, 400, 0, 0, 0, 1, 0, 0, 5, 0, strptr("Segoe UI"))
-	g.small = call(g32, "CreateFontW", signed(-16), 0, 0, 0, 400, 0, 0, 0, 1, 0, 0, 5, 0, strptr("Segoe UI"))
-	g.bold = call(g32, "CreateFontW", signed(-24), 0, 0, 0, 650, 0, 0, 0, 1, 0, 0, 5, 0, strptr("Segoe UI Variable Display"))
+	g.font = call(g32, "CreateFontW", signed(-17), 0, 0, 0, 400, 0, 0, 0, 1, 0, 0, 5, 0, strptr("Segoe UI Variable Text"))
+	g.small = call(g32, "CreateFontW", signed(-15), 0, 0, 0, 400, 0, 0, 0, 1, 0, 0, 5, 0, strptr("Segoe UI Variable Text"))
+	g.bold = call(g32, "CreateFontW", signed(-22), 0, 0, 0, 650, 0, 0, 0, 1, 0, 0, 5, 0, strptr("Segoe UI Variable Display"))
+	g.heading = call(g32, "CreateFontW", signed(-30), 0, 0, 0, 640, 0, 0, 0, 1, 0, 0, 5, 0, strptr("Segoe UI Variable Display"))
+	g.micro = call(g32, "CreateFontW", signed(-13), 0, 0, 0, 570, 0, 0, 0, 1, 0, 0, 5, 0, strptr("Segoe UI Variable Text"))
 	g.icon = loadIcon(root)
 	cls := utf("CodexQueueStudioNativeV3")
 	wc := WNDCLASSEX{Size: uint32(unsafe.Sizeof(WNDCLASSEX{})), WndProc: syscall.NewCallback(mainWndProc), Instance: call(k32, "GetModuleHandleW", 0), Cursor: call(u32, "LoadCursorW", 0, IDC_ARROW), ClassName: cls, Icon: g.icon, SmallIcon: g.icon}
@@ -1097,29 +1188,30 @@ func main() {
 	send(hwnd, WM_SETICON, 1, g.icon)
 	send(hwnd, WM_SETICON, 0, g.icon)
 	if hasFlag("--ui-smoke-test") {
-		// No network, session scan or scheduled delivery in a smoke test.
+		// The smoke test checks a live Win32 window without scanning sessions or sending messages.
 		call(u32, "SetTimer", hwnd, 9901, 350, 0)
 	} else {
 		core.Run()
+		call(u32, "SetTimer", hwnd, 9902, 600, 0)
 		call(u32, "SetTimer", hwnd, 1, 4000, 0)
 	}
 	if !hasFlag("--ui-smoke-test") {
-	go func() {
-		for {
-			ctx, cancel := context.WithTimeout(context.Background(), 20*time.Second)
-			defer cancel()
-			upd, _ := core.CheckUpdate(ctx)
-			if upd != nil {
-				core.setStatus("새 버전이 준비되었습니다: " + upd.Tag)
-				call(u32, "PostMessageW", hwnd, WM_APP+1, 0, 0)
+		go func() {
+			for {
+				ctx, cancel := context.WithTimeout(context.Background(), 20*time.Second)
+				defer cancel()
+				upd, _ := core.CheckUpdate(ctx)
+				if upd != nil {
+					core.setStatus("새 버전이 준비되었습니다: " + upd.Tag)
+					call(u32, "PostMessageW", hwnd, WM_APP+1, 0, 0)
+				}
+				select {
+				case <-core.stop:
+					return
+				case <-time.After(6 * time.Hour):
+				}
 			}
-			select {
-			case <-core.stop:
-				return
-			case <-time.After(6 * time.Hour):
-			}
-		}
-	}()
+		}()
 	}
 	var msg MSG
 	for call(u32, "GetMessageW", uintptr(unsafe.Pointer(&msg)), 0, 0, 0) != 0 {

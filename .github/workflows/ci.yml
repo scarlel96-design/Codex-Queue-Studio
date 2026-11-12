@@ -18,55 +18,71 @@ jobs:
       - uses: actions/setup-go@v5
         with:
           go-version-file: go.mod
-      - name: Validate and unit test
-        run: go test -race ./...
+      - name: Linux tests and race detector
         if: matrix.os == 'ubuntu-latest'
-      - name: Windows unit test
-        run: go test ./...
+        run: go test -race -count=1 ./...
+      - name: Windows tests, including rollback simulation
         if: matrix.os == 'windows-latest'
-      - name: Static analysis on Linux
+        run: go test -count=1 ./...
+      - name: Linux static analysis
         if: matrix.os == 'ubuntu-latest'
         run: go vet ./...
-      - name: Static analysis on Windows
+      - name: Windows static analysis
         if: matrix.os == 'windows-latest'
-        # Win32 LPARAM is a borrowed native pointer in the window procedure.
-        # All other Go vet analyzers remain enabled.
         run: go vet -unsafeptr=false ./...
-      - name: Compile native Windows GUI
-        if: matrix.os == 'windows-latest'
-        shell: pwsh
-        run: |
-          python -m pip install 'Pillow>=11,<13'
-          python assets/build_resources.py
-          go build -ldflags "-H windowsgui -s -w" -o CodexQueueStudio.exe .
-          go build -ldflags "-H windowsgui -s -w" -o CodexQueueUpdater.exe ./cmd/updater
-          if (!(Test-Path CodexQueueStudio.exe)) { throw 'Native GUI build missing' }
-          if (!(Test-Path CodexQueueUpdater.exe)) { throw 'Updater build missing' }
-      - name: Native window responsiveness smoke test
+      - name: Build native Win32 executables
         if: matrix.os == 'windows-latest'
         shell: pwsh
         run: |
           $ErrorActionPreference = 'Stop'
-          $sandbox = Join-Path $env:RUNNER_TEMP "cqs-ui-smoke"
-          New-Item -ItemType Directory -Force -Path $sandbox | Out-Null
-          $env:LOCALAPPDATA = $sandbox
-          $process = Start-Process -FilePath (Resolve-Path './CodexQueueStudio.exe') -ArgumentList '--ui-smoke-test' -PassThru
+          python assets/build_resources.py
+          if ($LASTEXITCODE -ne 0) { throw 'Icon/resource build failed' }
+          go build -ldflags '-H windowsgui -s -w' -o CodexQueueStudio.exe .
+          if ($LASTEXITCODE -ne 0) { throw 'Windows GUI build failed' }
+          go build -ldflags '-H windowsgui -s -w' -o CodexQueueUpdater.exe ./cmd/updater
+          if ($LASTEXITCODE -ne 0) { throw 'Updater build failed' }
+      - name: Native Win32 event-loop smoke test
+        if: matrix.os == 'windows-latest'
+        shell: pwsh
+        run: |
+          $ErrorActionPreference = 'Stop'
+          $p = Start-Process -FilePath (Resolve-Path './CodexQueueStudio.exe') -ArgumentList '--ui-smoke-test' -PassThru
           try {
-            if (!$process.WaitForExit(15000)) {
-              $process.Kill()
-              throw 'Win32 window did not process WM_TIMER and exit within 15 seconds'
+            if (!$p.WaitForExit(15000)) { $p.Kill(); throw 'Win32 UI smoke test timed out' }
+            if ($p.ExitCode -ne 0) { throw "UI smoke test exit code: $($p.ExitCode)" }
+          } finally { if (!$p.HasExited) { $p.Kill() } }
+      - name: Production startup and post-update UI health test
+        if: matrix.os == 'windows-latest'
+        shell: pwsh
+        run: |
+          $ErrorActionPreference = 'Stop'
+          $isolated = Join-Path $env:RUNNER_TEMP 'cqs-startup-test'
+          New-Item -ItemType Directory -Force -Path $isolated | Out-Null
+          $env:LOCALAPPDATA = $isolated
+          $env:CODEX_HOME = Join-Path $isolated 'empty-codex-home'
+          New-Item -ItemType Directory -Force -Path $env:CODEX_HOME | Out-Null
+          $marker = Join-Path $isolated 'ui-health.ok'
+          $nonce = 'github-actions-healthy-start'
+          $p = Start-Process -FilePath (Resolve-Path './CodexQueueStudio.exe') -ArgumentList '--post-update-health-file', $marker, '--post-update-health-nonce', $nonce -PassThru
+          try {
+            $deadline = (Get-Date).AddSeconds(25)
+            while (!(Test-Path $marker) -and (Get-Date) -lt $deadline) {
+              if ($p.HasExited) { throw 'Application exited before readiness marker' }
+              Start-Sleep -Milliseconds 300
             }
-            if ($process.ExitCode -ne 0) {
-              throw "Native window exited with code $($process.ExitCode)"
-            }
+            if (!(Test-Path $marker)) { throw 'UI readiness marker timed out' }
+            $contents = (Get-Content $marker -Raw).Trim()
+            if ($contents -ne "$nonce`n$($p.Id)" -and $contents -ne "$nonce`r`n$($p.Id)") { throw "Unexpected readiness marker: $contents" }
+            Start-Sleep -Seconds 5
+            if ($p.HasExited) { throw 'Application exited during startup acceptance window' }
           } finally {
-            if (!$process.HasExited) { $process.Kill() }
+            if (!$p.HasExited) { $p.Kill(); $p.WaitForExit() }
           }
       - name: Upload Windows build artifact
         if: matrix.os == 'windows-latest'
         uses: actions/upload-artifact@v4
         with:
-          name: CodexQueueStudio-Windows-x64-unsigned
+          name: CodexQueueStudio-Windows-x64-v3.2.1-unsigned
           path: |
             CodexQueueStudio.exe
             CodexQueueUpdater.exe

@@ -1,68 +1,82 @@
-# Codex Queue Studio 3.1.0
+# Codex Queue Studio 3.2.1 — Windows native companion
 
-Independent Windows companion application for Codex, not an official OpenAI product.
+Independent community application. Not an official OpenAI product.
 
-## New in 3.1.0
+## What this patch changes
 
-- Codex-only explorer excludes explicit ChatGPT/Atlas histories, subagents and unknown origins.
-- Title priority: authoritative App Server name, local session_index.jsonl name, first relevant user prompt, then 제목 미지정.
-- Native virtualized compact list shows title, project, source and modification time.
-- Windows 11 Win32 window controls, fixed light/dark contrast, multi-resolution icon and tray support.
-- GitHub Releases are built with exactly two files: complete version and separate update.
-- Update ZIPs are verified using GitHub SHA-256 and a per-executable manifest.
-- Staged update helper replaces the app and helper; backup restoration is attempted on error.
+- Only Codex sessions appear in the explorer. Explicit ChatGPT, Atlas, unknown-source, and child-agent sessions are excluded.
+- A manually assigned session name remains unchanged. An App Server authoritative name takes precedence over a stale local index.
+- If a session has no meaningful stored name, the first relevant user message is shown as a **derived title**.
+- Codex-only source classification is based on session metadata. Search text never controls session eligibility.
+- Virtualized sessions occupy one line each. The list shows the name, project, origin, and modification time.
+- The executable embeds a new Windows icon. The native window retains Windows 11 title bar buttons.
+- GitHub Releases must include exactly two assets: the complete application ZIP and an independent update ZIP.
+- The new updater verifies the GitHub release SHA-256 and the update manifest before replacing files.
+- The helper updates the main executable and the updater itself. Failed replacements attempt a rollback.
 
-## Use
+## Requirements and launch
 
-1. Extract the complete Windows x64 release ZIP into a writable folder.
-2. Run CodexQueueStudio.exe, not a BAT launcher.
-3. Choose an eligible Codex work session and inspect its history.
-4. Enter a message and select immediate delivery or a scheduled date and time.
-5. Keep the PC awake and the app running in the notification area.
+1. Unpack the complete Windows x64 release ZIP to a writable folder.
+2. Run `CodexQueueStudio.exe` directly. Python, browser runtime, and BAT files are not required.
+3. Use the Codex installation from the full official release or the managed engine installer.
+4. Select a Codex session, enter a message, and schedule the submission.
+5. Keep Windows awake and the app running for timed delivery.
 
-The managed Codex engine is installed with the complete release. It can also be installed from settings. Codex Desktop and this application run as different processes. Concurrent editing of one thread may conflict.
+Codex Desktop and this companion use separate runtime processes. An active Desktop session may conflict with an external `thread/resume` operation. Scheduled requests that need interactive approval are not automatically approved.
 
-## Session filtering and title rules
+## Session title rules
 
-Session eligibility is based on Codex source metadata. The accepted sources include cli, vscode, app, appServer, exec and Codex-named custom sources. ChatGPT and Atlas chat histories, subagent threads and unknown source kinds are not shown. This strict policy can hide genuine historical Codex sessions with missing metadata.
+1. Use a meaningful `thread.name` returned by Codex App Server.
+2. Otherwise, use the latest meaningful `thread_name` in `session_index.jsonl`.
+3. Otherwise, derive a title from the first relevant user message.
+4. Otherwise, display `제목 미지정`.
 
-A meaningful name from App Server takes precedence over the latest meaningful name in session_index.jsonl. If neither exists, a short user-message-based title is derived. This is not an official title or a rename. Generic Guardian review labels are not shown.
+Derived titles do not claim to be official generated names. Known `Guardian review` placeholders are not used as normal task names.
 
 ## Release contract
 
-Two and only two ZIP assets are uploaded by a successful tagged release:
+Tags use `vX.Y.Z`, where the version must match `AppVersion` in `core.go`.
 
-- CodexQueueStudio-Windows-x64.zip — complete installation, verified official Codex runtime, icon, README and licenses.
-- CodexQueueStudio-update-Windows-x64.zip — GUI, updater, and update-manifest.json containing file SHA-256 values.
+| GitHub Releases file | Contents | Purpose |
+|---|---|---|
+| `CodexQueueStudio-Windows-x64.zip` | Main EXE, updater EXE, verified official Codex engine, icons, license, documentation | Complete installation |
+| `CodexQueueStudio-update-Windows-x64.zip` | Main EXE, updater EXE, `update-manifest.json` with SHA-256 for both executables | Automatic update |
 
-The version tag vX.Y.Z must match AppVersion in core.go. Missing or invalid assets cause the workflow to fail.
+Both ZIP files are mandatory. The workflow checks their existence before publishing.
 
-The update helper runs from a verified staging directory. It keeps executable backups and attempts rollback if replacement or restart fails. Users of old v3 installations must perform a one-time full-package upgrade because the original updater only replaced the main binary.
+The app downloads only the update ZIP. It checks the GitHub asset's SHA-256 digest, ZIP member names, uncompressed sizes, release version, and per-file hashes. The updater runs from the verified staging directory after the app exits.
 
-## Build from source
+The old v3 updater only updated the main executable. Upgrading an existing v3 installation to this version can update the main executable but retain the old helper until the next release. For a clean v3.1 deployment, extract the complete ZIP.
 
-Install Go 1.23+ and Python 3. Install the build-only Pillow library (Pillow>=11,<13). Run assets/build_resources.py before compiling both Go executables with the Windows GUI linker option. Python/Pillow are not needed at runtime.
+## Build and test
 
-## Limitations
+```powershell
+go test ./...
+go vet -unsafeptr=false ./...
+python assets/build_resources.py
+go build -ldflags "-H windowsgui -s -w" -o CodexQueueStudio.exe .
+go build -ldflags "-H windowsgui -s -w" -o CodexQueueUpdater.exe ./cmd/updater
+```
 
-- Session files: CODEX_HOME or the user profile's .codex directory.
-- Schedule state: LOCALAPPDATA/CodexQueueStudio/state.json, with Windows DPAPI encryption.
-- Cloud-only ChatGPT conversations are not listed.
-- No automatic security approvals are granted.
-- No guaranteed delivery while sleeping, powered off, logged out or offline.
-- Real Windows 11 rendering, live Codex Desktop work, Authenticode signing and update rollback still require acceptance tests.
+The UI uses native Win32 and Windows Common Controls. The resources contain a multi-resolution application icon and Common Controls v6 manifest.
 
-See docs/CHANGES_3_1.md and docs/VERIFICATION.md.
+## Data and limitations
 
+- Session records: `CODEX_HOME` or `%USERPROFILE%\.codex`.
+- Local task data: `%LOCALAPPDATA%\CodexQueueStudio\state.json`.
+- Messages: protected by Windows DPAPI for the current account.
+- Unknown-source sessions: excluded. This may omit legitimate historical Codex threads without source metadata.
+- Cloud-only ChatGPT conversations: not included.
+- No Windows Task Scheduler service: no delivery while the computer is off, sleeping, or the user session is unavailable.
+- No automatic approval of sensitive operations.
+- Windows 11 UI, real Codex Desktop interaction, code signing and in-place rollback still require live acceptance testing.
 
-## Preview update verification: 3.1.0 → 3.2.0
+See `docs/AUDIT.md` and `docs/VERIFICATION.md` for unresolved risks and test evidence.
 
-Version 3.1.0 is the repaired preview baseline. Version 3.2.0 is a separate preview test release. Both are GitHub prereleases and publish two ZIP assets: the full installation and an independent verified update. The app checks prereleases while on the 3.x preview lineage. It can promote to the later public stable 1.0.0 without a numeric-version conflict. The stable 1.x channel ignores preview releases.
+## v3.2.1 Win32 UI and update hotfix
 
-Install the complete 3.1.0 ZIP to test the transition. Open Settings > Update Check, then install 3.2.0. The update helper checks the new app's native window before declaring success, and tries to restore backups on failure. Settings and scheduled messages remain in the local app data directory, outside the installation folder.
+This preview fixes the UI hang diagnosis and adds native progress views for update discovery, downloading and replacement. The in-app update center now shows the GitHub Release body without inventing changes. The updater requires a readiness marker written from the new Win32 message loop and repeated `SendMessageTimeoutW` responsiveness checks. It attempts rollback if the new GUI fails.
 
-The release workflow is activated by changes to .release-candidate on main, with required tests, hash checks, and exactly two attached ZIPs. Public 1.0.0 remains blocked until Windows UI, live Codex and updater rollback tests pass. See docs/UPDATE_ACCEPTANCE.md.
+The session and job persistence format is unchanged. Do not delete `state.json` when upgrading. Previous versions can be repaired with the full ZIP by replacing the two application EXE files while all processes are stopped.
 
-## 3.2.0 preview candidate
-
-This is the planned in-app update target for the repaired 3.1.0 baseline. The updater now blocks installation during an active Codex send, keeps session selection during refresh, and writes new executables through atomic staging. The public version number **1.0.0** remains reserved until an actual Windows update and live Codex regression test pass. See [3.2.0 preview acceptance](docs/RELEASE_3_2.md).
+Actual user hardware validation is required before any stable v1.0.0 release. Windows 11 typography and perceived visual quality have not been verified on the user's machine. Build and acceptance details are in `docs/RELEASE_3_2_1.md`.

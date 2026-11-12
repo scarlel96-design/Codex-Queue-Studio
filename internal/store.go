@@ -50,11 +50,8 @@ type JobPublic struct {
 }
 
 func (j Job) Public() JobPublic {
-	preview := j.Preview
-	if plaintext, err := OpenMessage(j.Cipher); err == nil {
-		preview = clipLine(plaintext, 100)
-	}
-	return JobPublic{j.ID, j.SessionID, j.SessionTitle, preview, j.When, j.CreatedAt, j.UpdatedAt, j.State, j.Mode, j.Error, j.Detail}
+	// The UI only needs the already persisted preview. Never decrypt on paint/timer.
+	return JobPublic{j.ID, j.SessionID, j.SessionTitle, j.Preview, j.When, j.CreatedAt, j.UpdatedAt, j.State, j.Mode, j.Error, j.Detail}
 }
 
 type Event struct {
