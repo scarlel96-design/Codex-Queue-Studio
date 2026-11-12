@@ -32,6 +32,8 @@ jobs:
         shell: pwsh
         run: |
           $ErrorActionPreference = 'Stop'
+          python -m pip install 'Pillow>=11,<13'
+          if ($LASTEXITCODE -ne 0) { throw 'Build-only Pillow installation failed' }
           python assets/build_resources.py
           if ($LASTEXITCODE -ne 0) { throw 'Resource build failed' }
           go build -ldflags '-H windowsgui -s -w' -o CodexQueueStudio.exe .
