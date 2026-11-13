@@ -62,11 +62,12 @@ type Event struct {
 }
 
 type State struct {
-	Version  int      `json:"version"`
-	Settings Settings `json:"settings"`
-	Jobs     []Job    `json:"jobs"`
-	Events   []Event  `json:"events"`
-	Relays   []RelayRule `json:"relays,omitempty"`
+	Version      int           `json:"version"`
+	Settings     Settings      `json:"settings"`
+	Jobs         []Job         `json:"jobs"`
+	Events       []Event       `json:"events"`
+	Relays       []RelayRule   `json:"relays,omitempty"`
+	ChatSessions []ChatSession `json:"chatSessions,omitempty"`
 }
 
 type Store struct {
@@ -92,11 +93,11 @@ func NewStore(path string, initial Settings) (*Store, error) {
 			changed = true
 		}
 	}
-	for i:=range st.state.Relays {
-		if st.state.Relays[i].State=="reviewing" || st.state.Relays[i].State=="reply-sending" {
-			st.state.Relays[i].State="uncertain"
-			st.state.Relays[i].LastError="프로그램이 처리 도중 종료되었습니다. 중복 방지를 위해 자동 재실행하지 않습니다."
-			changed=true
+	for i := range st.state.Relays {
+		if st.state.Relays[i].State == "reviewing" || st.state.Relays[i].State == "reply-sending" {
+			st.state.Relays[i].State = "uncertain"
+			st.state.Relays[i].LastError = "프로그램이 처리 도중 종료되었습니다. 중복 방지를 위해 자동 재실행하지 않습니다."
+			changed = true
 		}
 	}
 	if changed {
@@ -114,6 +115,7 @@ func (s *Store) Snapshot() State {
 	out.Jobs = append([]Job(nil), s.state.Jobs...)
 	out.Events = append([]Event(nil), s.state.Events...)
 	out.Relays = append([]RelayRule(nil), s.state.Relays...)
+	out.ChatSessions = append([]ChatSession(nil), s.state.ChatSessions...)
 	return out
 }
 
@@ -125,6 +127,7 @@ func (s *Store) Update(fn func(*State) error) error {
 	next.Jobs = append([]Job(nil), before.Jobs...)
 	next.Events = append([]Event(nil), before.Events...)
 	next.Relays = append([]RelayRule(nil), before.Relays...)
+	next.ChatSessions = append([]ChatSession(nil), before.ChatSessions...)
 	if err := fn(&next); err != nil {
 		return err
 	}

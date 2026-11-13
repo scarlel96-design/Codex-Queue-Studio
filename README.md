@@ -1,4 +1,4 @@
-# Codex Queue Studio 3.3.0 — Windows native companion
+# Codex Queue Studio 3.4.0 — Windows native companion
 
 Independent community application. Not an official OpenAI product.
 
@@ -93,3 +93,17 @@ Actual user hardware validation is required before any stable v1.0.0 release. Wi
 - The session explorer now uses row-level refresh and does not force a complete repaint every four seconds.
 
 Read docs/SMART_RELAY_PREVIEW.md before enabling automation. The feature remains preview until a real Codex Desktop end-to-end test succeeds.
+
+
+## v3.4.0 native session explorer and provider adapters
+
+- Use two explorer tabs: **Codex 작업** for real Codex threads and **GPT 채팅** for locally registered OpenAI API conversations.
+- View the stored messages of a registered GPT API conversation through the official Conversations Items endpoint. Existing consumer ChatGPT chats are not available.
+- Create an API conversation inside the GPT tab; it is saved locally for subsequent selection.
+- In Smart Relay, select the Codex work session and GPT conversation from native combo boxes. No manual session UUID is required.
+- Review models are fetched from your API account on demand. The model list excludes obvious audio, image, embedding, and moderation models but does not guarantee Responses API support.
+- The native UI now has denser panels, improved dual-theme contrast, a 210 ms easing tab indicator, and a 175 ms relay window entrance. Windows reduced-motion settings are respected.
+- The provider registry separates model, conversation, history and review adapters for later Gemini, Claude and Grok integrations. Those provider adapters are not yet implemented.
+- The Windows smoke test includes tab switching and Smart Relay control creation.
+
+Consult [v3.4 architecture and acceptance criteria](docs/ARCHITECTURE_3_4.md) and [v3.4 release notes](docs/RELEASE_3_4.md).

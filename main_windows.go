@@ -5,12 +5,11 @@ package main
 import (
 	"context"
 	_ "embed"
-	"fmt"
 	"os"
 	"os/exec"
 	"path/filepath"
-	"runtime"
 	"reflect"
+	"runtime"
 	"strconv"
 	"strings"
 	"sync"
@@ -119,6 +118,11 @@ const (
 	ID_REACTIVATE                = 123
 	ID_RELEASE_NOTES             = 124
 	ID_RELAY_PAGE                = 125
+	ID_TAB_CODEX                 = 126
+	ID_TAB_GPT                   = 127
+	ID_GPT_LIST                  = 128
+	ID_GPT_NEW                   = 129
+	ID_GPT_HISTORY               = 130
 	EM_SETREADONLY               = 0x00CF
 )
 
@@ -215,9 +219,9 @@ func signed(v int32) uintptr    { return uintptr(uint64(int64(v))) }
 func rgb(r, g, b uint32) uint32 { return r | (g << 8) | (b << 16) }
 func palette(dark bool) Palette {
 	if dark {
-		return Palette{rgb(14, 18, 27), rgb(21, 26, 38), rgb(30, 37, 51), rgb(25, 32, 45), rgb(242, 246, 252), rgb(151, 165, 187), rgb(67, 129, 233), rgb(255, 255, 255), rgb(53, 64, 82)}
+		return Palette{rgb(14, 17, 24), rgb(22, 26, 35), rgb(32, 37, 47), rgb(41, 47, 59), rgb(244, 246, 250), rgb(167, 177, 194), rgb(91, 157, 248), rgb(255, 255, 255), rgb(61, 69, 86)}
 	}
-	return Palette{rgb(246, 248, 252), rgb(239, 243, 250), rgb(255, 255, 255), rgb(250, 251, 254), rgb(27, 41, 63), rgb(108, 122, 146), rgb(43, 109, 216), rgb(255, 255, 255), rgb(220, 227, 238)}
+	return Palette{rgb(246, 247, 250), rgb(237, 240, 246), rgb(255, 255, 255), rgb(247, 249, 252), rgb(34, 43, 59), rgb(110, 122, 144), rgb(33, 103, 213), rgb(255, 255, 255), rgb(222, 228, 238)}
 }
 
 var u32 = syscall.NewLazyDLL("user32.dll")
@@ -313,8 +317,19 @@ type GUI struct {
 	updateMu                       sync.Mutex
 	updateView                     updateDisplay
 	healthyTicks                   int
-	refreshing                    atomic.Bool
-	lastStatus                    string
+	refreshing                     atomic.Bool
+	lastStatus                     string
+	explorerTab                    int
+	chats                          []internal.ChatSession
+	visibleChats                   []internal.ChatSession
+	selectedChat                   int
+	chatSeq                        atomic.Uint64
+	chatMu                         sync.Mutex
+	chatHistory                    string
+	tabMotionFrom, tabMotionTo     float64
+	tabMotionPosition              float64
+	tabMotionStarted               time.Time
+	tabMotionActive                bool
 }
 
 func (g *GUI) ctl(id int) uintptr { return g.controls[id] }
@@ -349,12 +364,15 @@ func (g *GUI) initControls() {
 	for _, b := range []struct {
 		id    int
 		title string
-	}{{ID_SESSIONS, "세션 탐색기"}, {ID_JOBS, "예약 관리"}, {ID_RELAY_PAGE, "스마트 릴레이"}, {ID_SETTINGS, "환경 설정"}, {ID_THEME, "테마 전환"}, {ID_REFRESH, "새로고침"}, {ID_SENDNOW, "지금 전송"}, {ID_SCHEDULE, "예약 등록"}, {ID_CANCEL, "예약 취소"}, {ID_REACTIVATE, "선택 예약 재개"}, {ID_ENGINE, "Codex 엔진 설치"}, {ID_CHECK, "업데이트 확인"}, {ID_UPDATE, "업데이트 설치"}, {ID_SAVE, "경로 적용"}, {ID_EXIT, "완전히 종료"}} {
+	}{{ID_SESSIONS, "세션 탐색기"}, {ID_JOBS, "예약 관리"}, {ID_RELAY_PAGE, "스마트 릴레이"}, {ID_SETTINGS, "환경 설정"}, {ID_THEME, "테마 전환"}, {ID_REFRESH, "새로고침"}, {ID_SENDNOW, "지금 전송"}, {ID_SCHEDULE, "예약 등록"}, {ID_CANCEL, "예약 취소"}, {ID_REACTIVATE, "선택 예약 재개"}, {ID_ENGINE, "Codex 엔진 설치"}, {ID_CHECK, "업데이트 확인"}, {ID_UPDATE, "업데이트 설치"}, {ID_SAVE, "경로 적용"}, {ID_EXIT, "완전히 종료"}, {ID_TAB_CODEX, "Codex 작업"}, {ID_TAB_GPT, "GPT 채팅"}, {ID_GPT_NEW, "새 GPT API 대화"}} {
 		g.button(b.id, b.title)
 	}
 	g.edit(ID_SEARCH, false)
 	send(g.ctl(ID_SEARCH), EM_SETCUEBANNER, 0, strptr("Codex 작업 세션 검색"))
 	g.edit(ID_HISTORY, true)
+	g.edit(ID_GPT_HISTORY, true)
+	send(g.ctl(ID_GPT_HISTORY), EM_SETREADONLY, 1, 0)
+	settext(g.ctl(ID_GPT_HISTORY), "GPT API 대화를 선택하면 기록이 표시됩니다.")
 	g.edit(ID_MESSAGE, true)
 	g.add(ID_DATE, "SysDateTimePick32", "", WS_TABSTOP)
 	g.add(ID_TIME, "SysDateTimePick32", "", WS_TABSTOP|DTS_TIMEFORMAT)
@@ -369,6 +387,10 @@ func (g *GUI) initControls() {
 		title string
 		width int32
 	}{{"세션 제목", 250}, {"프로젝트", 112}, {"출처", 90}, {"수정일", 95}})
+	g.list(ID_GPT_LIST, []struct {
+		title string
+		width int32
+	}{{"대화 이름", 300}, {"제공자", 75}, {"수정일", 110}})
 	g.list(ID_JOBLIST, []struct {
 		title string
 		width int32
@@ -399,13 +421,16 @@ func (g *GUI) updateColors() {
 	call(dwm, "DwmSetWindowAttribute", g.hwnd, 20, uintptr(unsafe.Pointer(&dark)), unsafe.Sizeof(uint32(0)))
 	corners := uint32(2) // DWMWCP_ROUND; Windows 11 preserves native caption buttons.
 	call(dwm, "DwmSetWindowAttribute", g.hwnd, 33, uintptr(unsafe.Pointer(&corners)), unsafe.Sizeof(corners))
-	for _, id := range []int{ID_SESSLIST, ID_JOBLIST} {
+	for _, id := range []int{ID_SESSLIST, ID_GPT_LIST, ID_JOBLIST} {
 		h := g.ctl(id)
 		send(h, LVM_SETTEXTCOLOR, 0, uintptr(g.pal.text))
 		send(h, LVM_SETBKCOLOR, 0, uintptr(g.pal.card))
 		send(h, LVM_SETTEXTBKCOLOR, 0, uintptr(g.pal.card))
 	}
 	call(u32, "InvalidateRect", g.hwnd, 0, 1)
+	if activeRelayWindow != nil && activeRelayWindow.hwnd != 0 {
+		activeRelayWindow.updateThemeColors()
+	}
 }
 func (g *GUI) layout() {
 	w, h := g.W, g.H
@@ -425,7 +450,7 @@ func (g *GUI) layout() {
 	}
 	move(g.ctl(ID_THEME), 14, h-130, 180, 38)
 	move(g.ctl(ID_EXIT), 14, h-78, 180, 38)
-	all := []int{ID_SEARCH, ID_REFRESH, ID_SESSLIST, ID_HISTORY, ID_MESSAGE, ID_DATE, ID_TIME, ID_SENDNOW, ID_SCHEDULE, ID_JOBLIST, ID_CANCEL, ID_REACTIVATE, ID_ENGINE, ID_CHECK, ID_UPDATE, ID_HOMEPATH, ID_SAVE, ID_RELEASE_NOTES}
+	all := []int{ID_SEARCH, ID_REFRESH, ID_SESSLIST, ID_HISTORY, ID_MESSAGE, ID_DATE, ID_TIME, ID_SENDNOW, ID_SCHEDULE, ID_JOBLIST, ID_CANCEL, ID_REACTIVATE, ID_ENGINE, ID_CHECK, ID_UPDATE, ID_HOMEPATH, ID_SAVE, ID_RELEASE_NOTES, ID_TAB_CODEX, ID_TAB_GPT, ID_GPT_LIST, ID_GPT_NEW, ID_GPT_HISTORY}
 	for _, id := range all {
 		show(g.ctl(id), false)
 	}
@@ -436,21 +461,38 @@ func (g *GUI) layout() {
 			left = 330
 		}
 		right := area - left - 18
-		move(g.ctl(ID_SEARCH), x, 124, left-126, 35)
-		move(g.ctl(ID_REFRESH), x+left-116, 124, 116, 35)
-		move(g.ctl(ID_SESSLIST), x, 173, left, h-211)
+		move(g.ctl(ID_TAB_CODEX), x+4, 120, 145, 34)
+		move(g.ctl(ID_TAB_GPT), x+154, 120, 145, 34)
+		move(g.ctl(ID_SEARCH), x, 169, left-126, 35)
+		move(g.ctl(ID_REFRESH), x+left-116, 169, 116, 35)
+		move(g.ctl(ID_SESSLIST), x, 218, left, h-256)
+		move(g.ctl(ID_GPT_LIST), x, 218, left, h-256)
+		for i, ratio := range []int32{64, 16, 20} {
+			send(g.ctl(ID_GPT_LIST), LVM_SETCOLUMNWIDTH, uintptr(i), uintptr(left*ratio/100))
+		}
 		for i, ratio := range []int32{45, 21, 16, 18} {
 			send(g.ctl(ID_SESSLIST), LVM_SETCOLUMNWIDTH, uintptr(i), uintptr(left*ratio/100))
 		}
 		xr := x + left + 18
-		move(g.ctl(ID_HISTORY), xr, 236, right, h-538)
+		move(g.ctl(ID_HISTORY), xr, 267, right, h-569)
+		move(g.ctl(ID_GPT_HISTORY), xr, 295, right, h-439)
+		move(g.ctl(ID_GPT_NEW), xr, h-103, right, 39)
 		move(g.ctl(ID_MESSAGE), xr, h-251, right, 117)
 		move(g.ctl(ID_DATE), xr, h-117, right-365, 36)
 		move(g.ctl(ID_TIME), xr+right-356, h-117, 95, 36)
 		move(g.ctl(ID_SENDNOW), xr+right-251, h-117, 119, 36)
 		move(g.ctl(ID_SCHEDULE), xr+right-124, h-117, 124, 36)
-		for _, id := range []int{ID_SEARCH, ID_REFRESH, ID_SESSLIST, ID_HISTORY, ID_MESSAGE, ID_DATE, ID_TIME, ID_SENDNOW, ID_SCHEDULE} {
+		for _, id := range []int{ID_SEARCH, ID_REFRESH, ID_TAB_CODEX, ID_TAB_GPT} {
 			show(g.ctl(id), true)
+		}
+		if g.explorerTab == 0 {
+			for _, id := range []int{ID_SESSLIST, ID_HISTORY, ID_MESSAGE, ID_DATE, ID_TIME, ID_SENDNOW, ID_SCHEDULE} {
+				show(g.ctl(id), true)
+			}
+		} else {
+			for _, id := range []int{ID_GPT_LIST, ID_GPT_HISTORY, ID_GPT_NEW} {
+				show(g.ctl(id), true)
+			}
 		}
 	case 1:
 		move(g.ctl(ID_JOBLIST), x, 138, area, h-247)
@@ -492,86 +534,117 @@ func (g *GUI) setPage(p int) {
 }
 func (g *GUI) refreshSessions() {
 	oldID := ""
-	if g.selected >= 0 && g.selected < len(g.visible) { oldID = g.visible[g.selected].ID }
+	if g.selected >= 0 && g.selected < len(g.visible) {
+		oldID = g.visible[g.selected].ID
+	}
 	search := strings.ToLower(strings.TrimSpace(gettext(g.ctl(ID_SEARCH))))
 	all := g.core.Snapshot()
 	oldCount := len(g.sessions)
-	next := make([]internal.Session,0,len(all))
-	for _,v := range all {
-		if search=="" || strings.Contains(strings.ToLower(v.Title+" "+v.Project+" "+v.ID+" "+v.Path),search) {
-			next=append(next,v)
-			if len(next)>=5000 { break }
-		}
-	}
-	g.sessions=all
-	if reflect.DeepEqual(g.visible,next) {
-		if oldCount!=len(all) { g.invalidateSummary() }
-		return
-	}
-	old:=g.visible
-	g.visible=next
-	h:=g.ctl(ID_SESSLIST)
-	if len(old)!=len(next) {
-		send(h,LVM_SETITEMCOUNT,uintptr(len(next)),3) // LVM_SETITEMCOUNT with NOINVALIDATEALL | NOSCROLL
-		call(u32,"InvalidateRect",h,0,0)
-	} else {
-		start,last:=-1,-1
-		for i:=range next {
-			if old[i]==next[i] {
-				if start>=0 {send(h,LVM_FIRST+21,uintptr(start),uintptr(last));start=-1}
-			} else {
-				if start<0 {start=i}
-				last=i
+	next := make([]internal.Session, 0, len(all))
+	for _, v := range all {
+		if search == "" || strings.Contains(strings.ToLower(v.Title+" "+v.Project+" "+v.ID+" "+v.Path), search) {
+			next = append(next, v)
+			if len(next) >= 5000 {
+				break
 			}
 		}
-		if start>=0 {send(h,LVM_FIRST+21,uintptr(start),uintptr(last))}
 	}
-	prevSelected:=g.selected
-	g.selected=-1
-	for i,v:=range next { if v.ID==oldID {g.selected=i;break} }
-	if prevSelected!=g.selected {
-		item:=LVITEMW{StateMask:3}
-		send(h,LVM_FIRST+43,^uintptr(0),uintptr(unsafe.Pointer(&item)))
-		if g.selected>=0 {item.State=3;send(h,LVM_FIRST+43,uintptr(g.selected),uintptr(unsafe.Pointer(&item)))}
+	g.sessions = all
+	if reflect.DeepEqual(g.visible, next) {
+		if oldCount != len(all) {
+			g.invalidateSummary()
+		}
+		return
+	}
+	old := g.visible
+	g.visible = next
+	h := g.ctl(ID_SESSLIST)
+	if len(old) != len(next) {
+		send(h, LVM_SETITEMCOUNT, uintptr(len(next)), 3) // LVM_SETITEMCOUNT with NOINVALIDATEALL | NOSCROLL
+		call(u32, "InvalidateRect", h, 0, 0)
+	} else {
+		start, last := -1, -1
+		for i := range next {
+			if old[i] == next[i] {
+				if start >= 0 {
+					send(h, LVM_FIRST+21, uintptr(start), uintptr(last))
+					start = -1
+				}
+			} else {
+				if start < 0 {
+					start = i
+				}
+				last = i
+			}
+		}
+		if start >= 0 {
+			send(h, LVM_FIRST+21, uintptr(start), uintptr(last))
+		}
+	}
+	prevSelected := g.selected
+	g.selected = -1
+	for i, v := range next {
+		if v.ID == oldID {
+			g.selected = i
+			break
+		}
+	}
+	if prevSelected != g.selected {
+		item := LVITEMW{StateMask: 3}
+		send(h, LVM_FIRST+43, ^uintptr(0), uintptr(unsafe.Pointer(&item)))
+		if g.selected >= 0 {
+			item.State = 3
+			send(h, LVM_FIRST+43, uintptr(g.selected), uintptr(unsafe.Pointer(&item)))
+		}
 	}
 	g.invalidateSummary()
 }
 func (g *GUI) invalidateSummary() {
-	r:=RECT{Left:230,Top:105,Right:g.W-28,Bottom:164}
-	call(u32,"InvalidateRect",g.hwnd,uintptr(unsafe.Pointer(&r)),0)
+	r := RECT{Left: 230, Top: 204, Right: g.W - 28, Bottom: 239}
+	call(u32, "InvalidateRect", g.hwnd, uintptr(unsafe.Pointer(&r)), 0)
 }
 func (g *GUI) refreshStatusRail() {
-	status:=g.core.Status()
-	if status==g.lastStatus { return }
-	g.lastStatus=status
-	r:=RECT{Left:233,Top:g.H-40,Right:g.W-24,Bottom:g.H}
-	call(u32,"InvalidateRect",g.hwnd,uintptr(unsafe.Pointer(&r)),0)
-}
-func (g *GUI) refreshJobs() {
-	next:=g.core.Pending()
-	if reflect.DeepEqual(g.jobs,next) {return}
-	old:=g.jobs
-	g.jobs=next
-	h:=g.ctl(ID_JOBLIST)
-	if len(old)!=len(next) {
-		send(h,LVM_SETITEMCOUNT,uintptr(len(next)),3)
-		call(u32,"InvalidateRect",h,0,0)
+	status := g.core.Status()
+	if status == g.lastStatus {
 		return
 	}
-	for i:=range next {if old[i]!=next[i] {send(h,LVM_FIRST+21,uintptr(i),uintptr(i))}}
+	g.lastStatus = status
+	r := RECT{Left: 233, Top: g.H - 40, Right: g.W - 24, Bottom: g.H}
+	call(u32, "InvalidateRect", g.hwnd, uintptr(unsafe.Pointer(&r)), 0)
+}
+func (g *GUI) refreshJobs() {
+	next := g.core.Pending()
+	if reflect.DeepEqual(g.jobs, next) {
+		return
+	}
+	old := g.jobs
+	g.jobs = next
+	h := g.ctl(ID_JOBLIST)
+	if len(old) != len(next) {
+		send(h, LVM_SETITEMCOUNT, uintptr(len(next)), 3)
+		call(u32, "InvalidateRect", h, 0, 0)
+		return
+	}
+	for i := range next {
+		if old[i] != next[i] {
+			send(h, LVM_FIRST+21, uintptr(i), uintptr(i))
+		}
+	}
 }
 func (g *GUI) asyncRefresh() {
-	if !g.refreshing.CompareAndSwap(false,true) {return}
+	if !g.refreshing.CompareAndSwap(false, true) {
+		return
+	}
 	g.core.setStatus("세션 검색 중")
 	go func() {
 		defer g.refreshing.Store(false)
-		ctx,cancel:=context.WithTimeout(context.Background(),30*time.Second)
+		ctx, cancel := context.WithTimeout(context.Background(), 30*time.Second)
 		defer cancel()
-		if err:=g.core.RefreshLocal();err==nil {
-			call(u32,"PostMessageW",g.hwnd,WM_APP+1,0,0)
-			_=g.core.MergeRemote(ctx)
+		if err := g.core.RefreshLocal(); err == nil {
+			call(u32, "PostMessageW", g.hwnd, WM_APP+1, 0, 0)
+			_ = g.core.MergeRemote(ctx)
 		}
-		call(u32,"PostMessageW",g.hwnd,WM_APP+1,0,0)
+		call(u32, "PostMessageW", g.hwnd, WM_APP+1, 0, 0)
 	}()
 }
 func (g *GUI) selectedSession() (internal.Session, bool) {
@@ -666,8 +739,21 @@ func (g *GUI) handleButton(id int) {
 		}
 		_ = g.core.store.Update(func(st *internal.State) error { st.Settings.Theme = chosen; return nil })
 		g.updateColors()
+	case ID_TAB_CODEX:
+		g.setExplorerTab(0)
+	case ID_TAB_GPT:
+		g.setExplorerTab(1)
+	case ID_GPT_NEW:
+		g.createGPTChat()
 	case ID_REFRESH:
-		g.asyncRefresh()
+		if g.explorerTab == 1 {
+			g.refreshChatSessions()
+			if g.selectedChat >= 0 {
+				g.selectGPTChat(g.selectedChat)
+			}
+		} else {
+			g.asyncRefresh()
+		}
 	case ID_SENDNOW:
 		g.sendMessage(true)
 	case ID_SCHEDULE:
@@ -791,14 +877,16 @@ func (g *GUI) draw(hdc uintptr) {
 	p := g.pal
 	fill(hdc, RECT{0, 0, g.W, g.H}, p.bg)
 	fill(hdc, RECT{0, 0, 208, g.H}, p.side)
+	fill(hdc, RECT{207, 0, 208, g.H}, p.border)
 	fill(hdc, RECT{17, 101, 189, 102}, p.border)
 	roundBox(hdc, RECT{16, g.H - 166, 191, g.H - 152}, p.border)
+	roundBox(hdc, RECT{19, 26, 58, 66}, p.border)
 	roundBox(hdc, RECT{20, 24, 56, 59}, p.accent)
 	drawText(hdc, "C", RECT{22, 23, 54, 60}, p.accentText, g.bold, DT_CENTER|DT_VCENTER|DT_SINGLELINE)
 	drawText(hdc, "Codex Queue", RECT{67, 27, 204, 58}, p.text, g.font, DT_SINGLELINE|DT_VCENTER)
-	drawText(hdc, "STUDIO  ·  3.3.0", RECT{21, 70, 189, 94}, p.muted, g.micro, DT_SINGLELINE)
+	drawText(hdc, "STUDIO  ·  3.4.0", RECT{21, 70, 189, 94}, p.muted, g.micro, DT_SINGLELINE)
 	title := "세션 탐색기"
-	sub := "Codex 작업 세션만 표시 · ChatGPT 일반 채팅 및 하위 에이전트 제외"
+	sub := "Codex 작업과 등록된 GPT API 대화를 빠르게 관리합니다"
 	if g.page == 1 {
 		title = "예약 작업"
 		sub = "예약 실행 상태와 실패 이력을 관리합니다"
@@ -823,15 +911,22 @@ func (g *GUI) draw(hdc uintptr) {
 		}
 		xr := x + left + 18
 		right := area - left - 18
-		roundBox(hdc, RECT{x - 6, 165, x + left + 6, g.H - 36}, p.card)
-		roundBox(hdc, RECT{xr - 6, 165, xr + right + 6, g.H - 36}, p.card)
-		drawText(hdc, fmt.Sprintf("세션 %d개 / 검색 결과 %d개", len(g.sessions), len(g.visible)), RECT{x + 6, 110, x + left, 130}, p.muted, g.small, DT_SINGLELINE)
+		roundBox(hdc, RECT{x - 5, 213, x + left + 7, g.H - 33}, p.border)
+		roundBox(hdc, RECT{xr - 5, 213, xr + right + 7, g.H - 33}, p.border)
+		roundBox(hdc, RECT{x - 6, 210, x + left + 6, g.H - 36}, p.card)
+		roundBox(hdc, RECT{xr - 6, 210, xr + right + 6, g.H - 36}, p.card)
+		g.drawExplorerTabs(hdc)
+		drawText(hdc, g.describeExplorer(), RECT{x + 6, 207, x + left, 230}, p.muted, g.small, DT_SINGLELINE)
+		if g.explorerTab == 1 {
+			g.drawGPTInspector(hdc, xr, right)
+			break
+		}
 		heading := "세션을 선택하세요"
 		if s, ok := g.selectedSession(); ok {
 			heading = s.Title
 		}
-		drawText(hdc, heading, RECT{xr + 7, 171, xr + right - 8, 204}, p.text, g.bold, DT_SINGLELINE|DT_END_ELLIPSIS)
-		drawText(hdc, "세션 대화 기록  ·  저장된 제목 우선", RECT{xr + 4, 207, xr + right, 230}, p.muted, g.small, DT_SINGLELINE)
+		drawText(hdc, heading, RECT{xr + 7, 228, xr + right - 8, 256}, p.text, g.bold, DT_SINGLELINE|DT_END_ELLIPSIS)
+		drawText(hdc, "세션 대화 기록  ·  저장된 제목 우선", RECT{xr + 4, 262, xr + right, 285}, p.muted, g.small, DT_SINGLELINE)
 		drawText(hdc, "예약할 메시지", RECT{xr + 4, g.H - 276, xr + right, g.H - 250}, p.text, g.font, DT_SINGLELINE)
 		drawText(hdc, "예약 날짜와 시간", RECT{xr + 4, g.H - 141, xr + right, g.H - 114}, p.muted, g.small, DT_SINGLELINE)
 	case 1:
@@ -845,16 +940,24 @@ func (g *GUI) drawButton(dis *DRAWITEMSTRUCT) {
 	p := g.pal
 	hdc := dis.Hdc
 	id := int(dis.CtlID)
-	selected := (id == ID_SESSIONS && g.page == 0) || (id == ID_JOBS && g.page == 1) || (id == ID_SETTINGS && g.page == 2)
+	selected := (id == ID_SESSIONS && g.page == 0) || (id == ID_JOBS && g.page == 1) || (id == ID_SETTINGS && g.page == 2) || (id == ID_RELAY_PAGE && g.page == 3) || (id == ID_TAB_CODEX && g.explorerTab == 0) || (id == ID_TAB_GPT && g.explorerTab == 1)
 	bg := p.card
 	fg := p.text
-	if id == ID_SCHEDULE || id == ID_SENDNOW || id == ID_UPDATE {
+	if id == ID_SCHEDULE || id == ID_SENDNOW || id == ID_UPDATE || id == ID_GPT_NEW {
 		bg = p.accent
 		fg = p.accentText
 	}
 	if selected {
 		bg = p.field
 		fg = p.accent
+	}
+	if id == ID_TAB_CODEX || id == ID_TAB_GPT {
+		bg = p.field
+		fg = p.muted
+		if selected {
+			bg = p.card
+			fg = p.accent
+		}
 	}
 	if id == ID_EXIT {
 		bg = p.side
@@ -869,10 +972,10 @@ func (g *GUI) drawButton(dis *DRAWITEMSTRUCT) {
 		fg = p.muted
 	}
 	roundBox(hdc, RECT{2, 2, dis.Rect.Right - dis.Rect.Left - 2, dis.Rect.Bottom - dis.Rect.Top - 2}, bg)
-	if selected {
+	if selected && id != ID_TAB_CODEX && id != ID_TAB_GPT {
 		roundBox(hdc, RECT{4, 8, 8, dis.Rect.Bottom - dis.Rect.Top - 8}, p.accent)
 	}
-	labels := map[int]string{ID_SESSIONS: "세션 탐색기", ID_JOBS: "예약 관리", ID_SETTINGS: "환경 설정", ID_RELAY_PAGE: "스마트 릴레이", ID_THEME: "◐   테마 전환", ID_REFRESH: "새로고침", ID_SENDNOW: "지금 전송", ID_SCHEDULE: "예약 등록", ID_CANCEL: "예약 취소", ID_REACTIVATE: "선택 예약 재개", ID_ENGINE: "Codex 엔진 설치", ID_CHECK: "업데이트 확인", ID_UPDATE: "업데이트 설치", ID_SAVE: "경로 적용", ID_EXIT: "완전히 종료"}
+	labels := map[int]string{ID_SESSIONS: "세션 탐색기", ID_JOBS: "예약 관리", ID_SETTINGS: "환경 설정", ID_RELAY_PAGE: "스마트 릴레이", ID_TAB_CODEX: "Codex 작업", ID_TAB_GPT: "GPT 채팅", ID_GPT_NEW: "새 GPT API 대화", ID_THEME: "◐   테마 전환", ID_REFRESH: "새로고침", ID_SENDNOW: "지금 전송", ID_SCHEDULE: "예약 등록", ID_CANCEL: "예약 취소", ID_REACTIVATE: "선택 예약 재개", ID_ENGINE: "Codex 엔진 설치", ID_CHECK: "업데이트 확인", ID_UPDATE: "업데이트 설치", ID_SAVE: "경로 적용", ID_EXIT: "완전히 종료"}
 	text := labels[id]
 	r := RECT{7, 0, dis.Rect.Right - dis.Rect.Left - 7, dis.Rect.Bottom - dis.Rect.Top}
 	drawText(hdc, text, r, fg, g.font, DT_CENTER|DT_SINGLELINE|DT_VCENTER)
@@ -983,15 +1086,25 @@ func mainWndProc(hwnd, msg, w, l uintptr) uintptr {
 	case WM_COMMAND:
 		id := int(w & 0xFFFF)
 		if id == ID_SEARCH && (w>>16)&0xFFFF == EN_CHANGE {
-			g.refreshSessions()
+			if g.explorerTab == 0 {
+				g.refreshSessions()
+			} else {
+				g.refreshChatSessions()
+			}
 		} else if (w>>16)&0xFFFF == BN_CLICKED {
 			g.handleButton(id)
 		}
 		return 0
 	case WM_NOTIFY:
-		g.notify(l)
+		if !g.handleGPTNotify(l) {
+			g.notify(l)
+		}
 		return 0
 	case WM_TIMER:
+		if w == explorerAnimationTimer {
+			g.tickTabAnimation()
+			return 0
+		}
 		if w == 9902 && !hasFlag("--ui-smoke-test") {
 			g.healthyTicks++
 			if g.healthyTicks >= 6 {
@@ -1006,14 +1119,44 @@ func mainWndProc(hwnd, msg, w, l uintptr) uintptr {
 			return 0
 		}
 		if w == 9901 && hasFlag("--ui-smoke-test") {
+			// Exercise the native tab controls and relay dialog without real traffic.
+			g.setExplorerTab(1)
+			if g.explorerTab != 1 || g.ctl(ID_GPT_LIST) == 0 {
+				os.Exit(21)
+			}
+			g.setExplorerTab(0)
+			if g.explorerTab != 0 || g.ctl(ID_SESSLIST) == 0 {
+				os.Exit(22)
+			}
+			openRelayWindow(g)
+			if activeRelayWindow == nil || activeRelayWindow.hwnd == 0 {
+				os.Exit(23)
+			}
+			if activeRelayWindow.ctl(relayWork) == 0 || activeRelayWindow.ctl(relayModel) == 0 {
+				os.Exit(24)
+			}
+			if send(activeRelayWindow.ctl(relayWork), 0x0146, 0, 0) < 1 ||
+				send(activeRelayWindow.ctl(relayConversation), 0x0146, 0, 0) < 1 {
+				os.Exit(25) // Empty session states must still have visible options.
+			}
+			call(u32, "DestroyWindow", activeRelayWindow.hwnd)
 			g.quitting = true
 			call(u32, "DestroyWindow", hwnd)
 			return 0
 		}
 		if w == 1 {
-			if g.page == 1 { g.refreshJobs() }
+			if g.page == 1 {
+				g.refreshJobs()
+			}
 			g.refreshStatusRail()
 		}
+		return 0
+	case WM_APP + 11:
+		g.refreshChatSessions()
+		g.refreshStatusRail()
+		return 0
+	case WM_APP + 12:
+		g.refreshGPTHistoryView()
 		return 0
 	case WM_APP + 1:
 		g.refreshSessions()
@@ -1066,7 +1209,9 @@ func mainWndProc(hwnd, msg, w, l uintptr) uintptr {
 		}
 		fallthrough
 	case WM_DESTROY:
-		if activeRelayWindow!=nil && activeRelayWindow.hwnd!=0 {call(u32,"DestroyWindow",activeRelayWindow.hwnd)}
+		if activeRelayWindow != nil && activeRelayWindow.hwnd != 0 {
+			call(u32, "DestroyWindow", activeRelayWindow.hwnd)
+		}
 		g.removeTray()
 		g.core.Stop()
 		call(u32, "PostQuitMessage", 0)
@@ -1201,7 +1346,7 @@ func main() {
 		core.SendDue()
 		return
 	}
-	g := &GUI{core: core, page: 0, W: 1350, H: 870, selected: -1}
+	g := &GUI{core: core, page: 0, W: 1350, H: 870, selected: -1, selectedChat: -1}
 	theme := core.store.Snapshot().Settings.Theme
 	g.dark = theme == "dark" || (theme == "system" && systemDark())
 	g.pal = palette(g.dark)
