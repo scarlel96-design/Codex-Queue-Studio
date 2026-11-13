@@ -50,6 +50,22 @@ var activeRelayWindow *RelayWindow
 
 func (r *RelayWindow) ctl(id int) uintptr { return r.controls[id] }
 
+func (r *RelayWindow) updateThemeColors() {
+	if r.hwnd==0{return}
+	p:=r.parent.pal
+	h:=r.ctl(relayRules)
+	if h!=0 {
+		send(h,LVM_SETTEXTCOLOR,0,uintptr(p.text))
+		send(h,LVM_SETBKCOLOR,0,uintptr(p.card))
+		send(h,LVM_SETTEXTBKCOLOR,0,uintptr(p.card))
+	}
+	var dark uint32
+	if r.parent.dark{dark=1}
+	call(dwm,"DwmSetWindowAttribute",r.hwnd,20,uintptr(unsafe.Pointer(&dark)),unsafe.Sizeof(dark))
+	call(u32,"InvalidateRect",r.hwnd,0,1)
+}
+
+
 func (r *RelayWindow) control(id int,class,title string,style uintptr) {
 	h:=createWindow(class,title,WS_CHILD|WS_VISIBLE|style,0,r.hwnd,id,0,0,100,30)
 	r.controls[id]=h
@@ -79,6 +95,7 @@ func (r *RelayWindow) init() {
 		send(h,LVM_INSERTCOLUMNW,uintptr(i),uintptr(unsafe.Pointer(&c)))
 	}
 	settext(r.ctl(relayPreview),"규칙을 선택하면 실행 상태와 AI 답변을 확인할 수 있습니다.")
+	r.updateThemeColors()
 	r.resize()
 	r.refresh()
 	call(u32,"SetTimer",r.hwnd,1,3000,0)
