@@ -314,7 +314,7 @@ func openRelayWindow(parent *GUI) {
 	wc:=WNDCLASSEX{Size:uint32(unsafe.Sizeof(WNDCLASSEX{})),WndProc:syscall.NewCallback(relayWndProc),
 		Instance:call(k32,"GetModuleHandleW",0),Cursor:call(u32,"LoadCursorW",0,IDC_ARROW),ClassName:cls,Icon:parent.icon,SmallIcon:parent.icon}
 	call(u32,"RegisterClassExW",uintptr(unsafe.Pointer(&wc)))
-	h:=createWindow("CQSRelayNativeV1","Codex Queue Studio · 스마트 릴레이",WS_OVERLAPPEDWINDOW|WS_VISIBLE,0,0,0,100,80,1180,790)
+	h:=createWindow("CQSRelayNativeV1","Codex Queue Studio · 스마트 릴레이",WS_OVERLAPPEDWINDOW,0,0,0,100,80,1180,790)
 	if h==0{
 		activeRelayWindow=nil
 		parent.alert("스마트 릴레이 창을 만들지 못했습니다")
@@ -322,4 +322,13 @@ func openRelayWindow(parent *GUI) {
 	}
 	r.hwnd=h
 	send(h,WM_SETICON,1,parent.icon)
+	var dark uint32
+	if parent.dark{dark=1}
+	call(dwm,"DwmSetWindowAttribute",h,20,uintptr(unsafe.Pointer(&dark)),unsafe.Sizeof(dark))
+	corners:=uint32(2)
+	call(dwm,"DwmSetWindowAttribute",h,33,uintptr(unsafe.Pointer(&corners)),unsafe.Sizeof(corners))
+	var animations int32
+	if call(u32,"SystemParametersInfoW",0x1042,0,uintptr(unsafe.Pointer(&animations)),0)!=0 && animations!=0 {
+		if call(u32,"AnimateWindow",h,175,0x00080000)==0 {show(h,true)}
+	} else {show(h,true)}
 }
