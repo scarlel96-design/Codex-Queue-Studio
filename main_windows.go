@@ -796,7 +796,7 @@ func (g *GUI) draw(hdc uintptr) {
 	roundBox(hdc, RECT{20, 24, 56, 59}, p.accent)
 	drawText(hdc, "C", RECT{22, 23, 54, 60}, p.accentText, g.bold, DT_CENTER|DT_VCENTER|DT_SINGLELINE)
 	drawText(hdc, "Codex Queue", RECT{67, 27, 204, 58}, p.text, g.font, DT_SINGLELINE|DT_VCENTER)
-	drawText(hdc, "STUDIO  ·  3.2.1", RECT{21, 70, 189, 94}, p.muted, g.micro, DT_SINGLELINE)
+	drawText(hdc, "STUDIO  ·  3.3.0", RECT{21, 70, 189, 94}, p.muted, g.micro, DT_SINGLELINE)
 	title := "세션 탐색기"
 	sub := "Codex 작업 세션만 표시 · ChatGPT 일반 채팅 및 하위 에이전트 제외"
 	if g.page == 1 {
