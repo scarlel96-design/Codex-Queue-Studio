@@ -95,8 +95,8 @@ func (r *RelayWindow) conversationChoice() string {
 }
 func (r *RelayWindow) modelChoice() string {
 	i:=comboSelection(r.ctl(relayModel))
-	if i<0||i>=len(r.models){return ""}
-	return r.models[i].ID
+	if i<0||i>=len(r.displayModels){return ""}
+	return r.displayModels[i].ID
 }
 
 func (r *RelayWindow) requestModels() {
@@ -126,6 +126,7 @@ func (r *RelayWindow) showModels() {
 	models:=append([]internal.ModelOption(nil),r.models...)
 	errText:=r.modelError
 	r.modelMu.Unlock()
+	r.displayModels=models
 	h:=r.ctl(relayModel)
 	send(h,cbResetContent,0,0)
 	if errText!="" {
@@ -144,5 +145,5 @@ func (r *RelayWindow) showModels() {
 }
 
 func (r *RelayWindow) selectedSummary() string {
-	return fmt.Sprintf("Codex %d개 · GPT API 대화 %d개 · 검토 모델 %d개",len(r.workSessions),len(r.apiChats),len(r.models))
+	return fmt.Sprintf("Codex %d개 · GPT API 대화 %d개 · 검토 모델 %d개",len(r.workSessions),len(r.apiChats),len(r.displayModels))
 }
