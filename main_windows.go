@@ -698,8 +698,14 @@ func (g *GUI) handleButton(id int) {
 		}
 		_ = g.core.store.Update(func(st *internal.State) error { st.Settings.Theme = chosen; return nil })
 		g.updateColors()
+	case ID_TAB_CODEX:
+		g.setExplorerTab(0)
+	case ID_TAB_GPT:
+		g.setExplorerTab(1)
+	case ID_GPT_NEW:
+		g.createGPTChat()
 	case ID_REFRESH:
-		g.asyncRefresh()
+		if g.explorerTab==1 {g.refreshChatSessions();if g.selectedChat>=0 {g.selectGPTChat(g.selectedChat)}} else {g.asyncRefresh()}
 	case ID_SENDNOW:
 		g.sendMessage(true)
 	case ID_SCHEDULE:
@@ -828,9 +834,9 @@ func (g *GUI) draw(hdc uintptr) {
 	roundBox(hdc, RECT{20, 24, 56, 59}, p.accent)
 	drawText(hdc, "C", RECT{22, 23, 54, 60}, p.accentText, g.bold, DT_CENTER|DT_VCENTER|DT_SINGLELINE)
 	drawText(hdc, "Codex Queue", RECT{67, 27, 204, 58}, p.text, g.font, DT_SINGLELINE|DT_VCENTER)
-	drawText(hdc, "STUDIO  ·  3.3.0", RECT{21, 70, 189, 94}, p.muted, g.micro, DT_SINGLELINE)
+	drawText(hdc, "STUDIO  ·  3.4.0", RECT{21, 70, 189, 94}, p.muted, g.micro, DT_SINGLELINE)
 	title := "세션 탐색기"
-	sub := "Codex 작업 세션만 표시 · ChatGPT 일반 채팅 및 하위 에이전트 제외"
+	sub := "Codex 작업과 등록된 GPT API 대화를 빠르게 관리합니다"
 	if g.page == 1 {
 		title = "예약 작업"
 		sub = "예약 실행 상태와 실패 이력을 관리합니다"
@@ -855,15 +861,17 @@ func (g *GUI) draw(hdc uintptr) {
 		}
 		xr := x + left + 18
 		right := area - left - 18
-		roundBox(hdc, RECT{x - 6, 165, x + left + 6, g.H - 36}, p.card)
-		roundBox(hdc, RECT{xr - 6, 165, xr + right + 6, g.H - 36}, p.card)
-		drawText(hdc, fmt.Sprintf("세션 %d개 / 검색 결과 %d개", len(g.sessions), len(g.visible)), RECT{x + 6, 110, x + left, 130}, p.muted, g.small, DT_SINGLELINE)
+		roundBox(hdc,RECT{x-6,210,x+left+6,g.H-36},p.card)
+		roundBox(hdc,RECT{xr-6,210,xr+right+6,g.H-36},p.card)
+		g.drawExplorerTabs(hdc)
+		drawText(hdc,g.describeExplorer(),RECT{x+6,207,x+left,230},p.muted,g.small,DT_SINGLELINE)
+		if g.explorerTab==1 {g.drawGPTInspector(hdc,xr,right);break}
 		heading := "세션을 선택하세요"
 		if s, ok := g.selectedSession(); ok {
 			heading = s.Title
 		}
-		drawText(hdc, heading, RECT{xr + 7, 171, xr + right - 8, 204}, p.text, g.bold, DT_SINGLELINE|DT_END_ELLIPSIS)
-		drawText(hdc, "세션 대화 기록  ·  저장된 제목 우선", RECT{xr + 4, 207, xr + right, 230}, p.muted, g.small, DT_SINGLELINE)
+		drawText(hdc, heading, RECT{xr + 7, 228, xr + right - 8, 256}, p.text, g.bold, DT_SINGLELINE|DT_END_ELLIPSIS)
+		drawText(hdc, "세션 대화 기록  ·  저장된 제목 우선", RECT{xr + 4, 262, xr + right, 285}, p.muted, g.small, DT_SINGLELINE)
 		drawText(hdc, "예약할 메시지", RECT{xr + 4, g.H - 276, xr + right, g.H - 250}, p.text, g.font, DT_SINGLELINE)
 		drawText(hdc, "예약 날짜와 시간", RECT{xr + 4, g.H - 141, xr + right, g.H - 114}, p.muted, g.small, DT_SINGLELINE)
 	case 1:
@@ -877,10 +885,10 @@ func (g *GUI) drawButton(dis *DRAWITEMSTRUCT) {
 	p := g.pal
 	hdc := dis.Hdc
 	id := int(dis.CtlID)
-	selected := (id == ID_SESSIONS && g.page == 0) || (id == ID_JOBS && g.page == 1) || (id == ID_SETTINGS && g.page == 2)
+	selected := (id == ID_SESSIONS && g.page == 0) || (id == ID_JOBS && g.page == 1) || (id == ID_SETTINGS && g.page == 2) || (id == ID_RELAY_PAGE && g.page == 3) || (id == ID_TAB_CODEX && g.explorerTab==0) || (id == ID_TAB_GPT && g.explorerTab==1)
 	bg := p.card
 	fg := p.text
-	if id == ID_SCHEDULE || id == ID_SENDNOW || id == ID_UPDATE {
+	if id == ID_SCHEDULE || id == ID_SENDNOW || id == ID_UPDATE || id==ID_GPT_NEW {
 		bg = p.accent
 		fg = p.accentText
 	}
@@ -904,7 +912,7 @@ func (g *GUI) drawButton(dis *DRAWITEMSTRUCT) {
 	if selected {
 		roundBox(hdc, RECT{4, 8, 8, dis.Rect.Bottom - dis.Rect.Top - 8}, p.accent)
 	}
-	labels := map[int]string{ID_SESSIONS: "세션 탐색기", ID_JOBS: "예약 관리", ID_SETTINGS: "환경 설정", ID_RELAY_PAGE: "스마트 릴레이", ID_THEME: "◐   테마 전환", ID_REFRESH: "새로고침", ID_SENDNOW: "지금 전송", ID_SCHEDULE: "예약 등록", ID_CANCEL: "예약 취소", ID_REACTIVATE: "선택 예약 재개", ID_ENGINE: "Codex 엔진 설치", ID_CHECK: "업데이트 확인", ID_UPDATE: "업데이트 설치", ID_SAVE: "경로 적용", ID_EXIT: "완전히 종료"}
+	labels := map[int]string{ID_SESSIONS: "세션 탐색기", ID_JOBS: "예약 관리", ID_SETTINGS: "환경 설정", ID_RELAY_PAGE: "스마트 릴레이", ID_TAB_CODEX:"Codex 작업",ID_TAB_GPT:"GPT 채팅",ID_GPT_NEW:"새 GPT API 대화", ID_THEME: "◐   테마 전환", ID_REFRESH: "새로고침", ID_SENDNOW: "지금 전송", ID_SCHEDULE: "예약 등록", ID_CANCEL: "예약 취소", ID_REACTIVATE: "선택 예약 재개", ID_ENGINE: "Codex 엔진 설치", ID_CHECK: "업데이트 확인", ID_UPDATE: "업데이트 설치", ID_SAVE: "경로 적용", ID_EXIT: "완전히 종료"}
 	text := labels[id]
 	r := RECT{7, 0, dis.Rect.Right - dis.Rect.Left - 7, dis.Rect.Bottom - dis.Rect.Top}
 	drawText(hdc, text, r, fg, g.font, DT_CENTER|DT_SINGLELINE|DT_VCENTER)
@@ -1015,15 +1023,16 @@ func mainWndProc(hwnd, msg, w, l uintptr) uintptr {
 	case WM_COMMAND:
 		id := int(w & 0xFFFF)
 		if id == ID_SEARCH && (w>>16)&0xFFFF == EN_CHANGE {
-			g.refreshSessions()
+			if g.explorerTab==0 {g.refreshSessions()}else{g.refreshChatSessions()}
 		} else if (w>>16)&0xFFFF == BN_CLICKED {
 			g.handleButton(id)
 		}
 		return 0
 	case WM_NOTIFY:
-		g.notify(l)
+		if !g.handleGPTNotify(l){g.notify(l)}
 		return 0
 	case WM_TIMER:
+		if w==explorerAnimationTimer {g.tickTabAnimation();return 0}
 		if w == 9902 && !hasFlag("--ui-smoke-test") {
 			g.healthyTicks++
 			if g.healthyTicks >= 6 {
@@ -1046,6 +1055,13 @@ func mainWndProc(hwnd, msg, w, l uintptr) uintptr {
 			if g.page == 1 { g.refreshJobs() }
 			g.refreshStatusRail()
 		}
+		return 0
+	case WM_APP + 11:
+		g.refreshChatSessions()
+		g.refreshStatusRail()
+		return 0
+	case WM_APP + 12:
+		g.refreshGPTHistoryView()
 		return 0
 	case WM_APP + 1:
 		g.refreshSessions()
