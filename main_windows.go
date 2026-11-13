@@ -568,7 +568,7 @@ func (g *GUI) refreshSessions() {
 	g.invalidateSummary()
 }
 func (g *GUI) invalidateSummary() {
-	r:=RECT{Left:230,Top:105,Right:g.W-28,Bottom:164}
+	r:=RECT{Left:230,Top:204,Right:g.W-28,Bottom:239}
 	call(u32,"InvalidateRect",g.hwnd,uintptr(unsafe.Pointer(&r)),0)
 }
 func (g *GUI) refreshStatusRail() {
