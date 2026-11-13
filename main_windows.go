@@ -1055,8 +1055,17 @@ func mainWndProc(hwnd, msg, w, l uintptr) uintptr {
 			return 0
 		}
 		if w == 9901 && hasFlag("--ui-smoke-test") {
-			g.quitting = true
-			call(u32, "DestroyWindow", hwnd)
+			// Exercise the native tab controls and relay dialog without real traffic.
+			g.setExplorerTab(1)
+			if g.explorerTab!=1 || g.ctl(ID_GPT_LIST)==0 {os.Exit(21)}
+			g.setExplorerTab(0)
+			if g.explorerTab!=0 || g.ctl(ID_SESSLIST)==0 {os.Exit(22)}
+			openRelayWindow(g)
+			if activeRelayWindow==nil||activeRelayWindow.hwnd==0 {os.Exit(23)}
+			if activeRelayWindow.ctl(relayWork)==0||activeRelayWindow.ctl(relayModel)==0 {os.Exit(24)}
+			call(u32,"DestroyWindow",activeRelayWindow.hwnd)
+			g.quitting=true
+			call(u32,"DestroyWindow",hwnd)
 			return 0
 		}
 		if w == 1 {
