@@ -1135,6 +1135,10 @@ func mainWndProc(hwnd, msg, w, l uintptr) uintptr {
 			if activeRelayWindow.ctl(relayWork) == 0 || activeRelayWindow.ctl(relayModel) == 0 {
 				os.Exit(24)
 			}
+			if send(activeRelayWindow.ctl(relayWork), 0x0146, 0, 0) < 1 ||
+				send(activeRelayWindow.ctl(relayConversation), 0x0146, 0, 0) < 1 {
+				os.Exit(25) // Empty session states must still have visible options.
+			}
 			call(u32, "DestroyWindow", activeRelayWindow.hwnd)
 			g.quitting = true
 			call(u32, "DestroyWindow", hwnd)
