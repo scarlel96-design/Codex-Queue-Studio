@@ -20,7 +20,7 @@ import (
 	"codexqueuestudiov3/internal"
 )
 
-const AppVersion = "3.3.0"
+const AppVersion = "3.4.0"
 const repoReleases = "https://api.github.com/repos/scarlel96-design/Codex-Queue-Studio/releases?per_page=40"
 
 type Core struct {
