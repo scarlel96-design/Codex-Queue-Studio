@@ -1,4 +1,4 @@
-# Codex Queue Studio 3.2.1 — Windows native companion
+# Codex Queue Studio 3.3.0 — Windows native companion
 
 Independent community application. Not an official OpenAI product.
 
@@ -80,3 +80,16 @@ This preview fixes the UI hang diagnosis and adds native progress views for upda
 The session and job persistence format is unchanged. Do not delete `state.json` when upgrading. Previous versions can be repaired with the full ZIP by replacing the two application EXE files while all processes are stopped.
 
 Actual user hardware validation is required before any stable v1.0.0 release. Windows 11 typography and perceived visual quality have not been verified on the user's machine. Build and acceptance details are in `docs/RELEASE_3_2_1.md`.
+
+
+## 3.3.0 Smart Relay preview
+
+- A separate native Win32 Smart Relay workspace supports Codex completion monitoring and API conversation reviews.
+- Use the chosen API Conversation ID (conv_...) or leave the field empty to create a new conversation.
+- Existing ChatGPT web/app chat IDs cannot receive messages through the OpenAI API.
+- Optional reply-to-Codex is disabled by default. User approval is checked by default.
+- Each link runs at most three review cycles; uncertain network outcomes are not automatically retried.
+- Set OPENAI_API_KEY before launching the app. OpenAI API billing is separate from ChatGPT plans.
+- The session explorer now uses row-level refresh and does not force a complete repaint every four seconds.
+
+Read docs/SMART_RELAY_PREVIEW.md before enabling automation. The feature remains preview until a real Codex Desktop end-to-end test succeeds.
