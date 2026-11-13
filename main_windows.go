@@ -1066,6 +1066,7 @@ func mainWndProc(hwnd, msg, w, l uintptr) uintptr {
 		}
 		fallthrough
 	case WM_DESTROY:
+		if activeRelayWindow!=nil && activeRelayWindow.hwnd!=0 {call(u32,"DestroyWindow",activeRelayWindow.hwnd)}
 		g.removeTray()
 		g.core.Stop()
 		call(u32, "PostQuitMessage", 0)
