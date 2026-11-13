@@ -117,6 +117,9 @@ func (c *Core) runRelayOnce(ctx context.Context) {
 				})
 			}
 		}
+		if err==nil {
+			err=c.RegisterChat("openai",convID,"Codex 검토 · "+rule.WorkSessionID[:min(8,len(rule.WorkSessionID))])
+		}
 		var reply string
 		if err==nil {
 			reply,err=client.Review(ctx,convID,rule.Model,completion.Message,rule.Instructions)
