@@ -119,6 +119,11 @@ const (
 	ID_REACTIVATE                = 123
 	ID_RELEASE_NOTES             = 124
 	ID_RELAY_PAGE                = 125
+	ID_TAB_CODEX                 = 126
+	ID_TAB_GPT                   = 127
+	ID_GPT_LIST                  = 128
+	ID_GPT_NEW                   = 129
+	ID_GPT_HISTORY               = 130
 	EM_SETREADONLY               = 0x00CF
 )
 
@@ -315,6 +320,17 @@ type GUI struct {
 	healthyTicks                   int
 	refreshing                    atomic.Bool
 	lastStatus                    string
+	explorerTab                   int
+	chats                         []internal.ChatSession
+	visibleChats                  []internal.ChatSession
+	selectedChat                  int
+	chatSeq                       atomic.Uint64
+	chatMu                        sync.Mutex
+	chatHistory                   string
+	tabMotionFrom,tabMotionTo      float64
+	tabMotionPosition             float64
+	tabMotionStarted              time.Time
+	tabMotionActive               bool
 }
 
 func (g *GUI) ctl(id int) uintptr { return g.controls[id] }
@@ -349,12 +365,15 @@ func (g *GUI) initControls() {
 	for _, b := range []struct {
 		id    int
 		title string
-	}{{ID_SESSIONS, "세션 탐색기"}, {ID_JOBS, "예약 관리"}, {ID_RELAY_PAGE, "스마트 릴레이"}, {ID_SETTINGS, "환경 설정"}, {ID_THEME, "테마 전환"}, {ID_REFRESH, "새로고침"}, {ID_SENDNOW, "지금 전송"}, {ID_SCHEDULE, "예약 등록"}, {ID_CANCEL, "예약 취소"}, {ID_REACTIVATE, "선택 예약 재개"}, {ID_ENGINE, "Codex 엔진 설치"}, {ID_CHECK, "업데이트 확인"}, {ID_UPDATE, "업데이트 설치"}, {ID_SAVE, "경로 적용"}, {ID_EXIT, "완전히 종료"}} {
+	}{{ID_SESSIONS, "세션 탐색기"}, {ID_JOBS, "예약 관리"}, {ID_RELAY_PAGE, "스마트 릴레이"}, {ID_SETTINGS, "환경 설정"}, {ID_THEME, "테마 전환"}, {ID_REFRESH, "새로고침"}, {ID_SENDNOW, "지금 전송"}, {ID_SCHEDULE, "예약 등록"}, {ID_CANCEL, "예약 취소"}, {ID_REACTIVATE, "선택 예약 재개"}, {ID_ENGINE, "Codex 엔진 설치"}, {ID_CHECK, "업데이트 확인"}, {ID_UPDATE, "업데이트 설치"}, {ID_SAVE, "경로 적용"}, {ID_EXIT, "완전히 종료"}, {ID_TAB_CODEX, "Codex 작업"}, {ID_TAB_GPT, "GPT 채팅"}, {ID_GPT_NEW, "새 GPT API 대화"}} {
 		g.button(b.id, b.title)
 	}
 	g.edit(ID_SEARCH, false)
 	send(g.ctl(ID_SEARCH), EM_SETCUEBANNER, 0, strptr("Codex 작업 세션 검색"))
 	g.edit(ID_HISTORY, true)
+	g.edit(ID_GPT_HISTORY, true)
+	send(g.ctl(ID_GPT_HISTORY),EM_SETREADONLY,1,0)
+	settext(g.ctl(ID_GPT_HISTORY),"GPT API 대화를 선택하면 기록이 표시됩니다.")
 	g.edit(ID_MESSAGE, true)
 	g.add(ID_DATE, "SysDateTimePick32", "", WS_TABSTOP)
 	g.add(ID_TIME, "SysDateTimePick32", "", WS_TABSTOP|DTS_TIMEFORMAT)
@@ -369,6 +388,10 @@ func (g *GUI) initControls() {
 		title string
 		width int32
 	}{{"세션 제목", 250}, {"프로젝트", 112}, {"출처", 90}, {"수정일", 95}})
+	g.list(ID_GPT_LIST, []struct {
+		title string
+		width int32
+	}{{"대화 이름",300},{"제공자",75},{"수정일",110}})
 	g.list(ID_JOBLIST, []struct {
 		title string
 		width int32
@@ -425,7 +448,7 @@ func (g *GUI) layout() {
 	}
 	move(g.ctl(ID_THEME), 14, h-130, 180, 38)
 	move(g.ctl(ID_EXIT), 14, h-78, 180, 38)
-	all := []int{ID_SEARCH, ID_REFRESH, ID_SESSLIST, ID_HISTORY, ID_MESSAGE, ID_DATE, ID_TIME, ID_SENDNOW, ID_SCHEDULE, ID_JOBLIST, ID_CANCEL, ID_REACTIVATE, ID_ENGINE, ID_CHECK, ID_UPDATE, ID_HOMEPATH, ID_SAVE, ID_RELEASE_NOTES}
+	all := []int{ID_SEARCH, ID_REFRESH, ID_SESSLIST, ID_HISTORY, ID_MESSAGE, ID_DATE, ID_TIME, ID_SENDNOW, ID_SCHEDULE, ID_JOBLIST, ID_CANCEL, ID_REACTIVATE, ID_ENGINE, ID_CHECK, ID_UPDATE, ID_HOMEPATH, ID_SAVE, ID_RELEASE_NOTES, ID_TAB_CODEX, ID_TAB_GPT, ID_GPT_LIST, ID_GPT_NEW, ID_GPT_HISTORY}
 	for _, id := range all {
 		show(g.ctl(id), false)
 	}
@@ -436,21 +459,30 @@ func (g *GUI) layout() {
 			left = 330
 		}
 		right := area - left - 18
-		move(g.ctl(ID_SEARCH), x, 124, left-126, 35)
-		move(g.ctl(ID_REFRESH), x+left-116, 124, 116, 35)
-		move(g.ctl(ID_SESSLIST), x, 173, left, h-211)
+		move(g.ctl(ID_TAB_CODEX), x+4, 120, 145, 34)
+		move(g.ctl(ID_TAB_GPT), x+154, 120, 145, 34)
+		move(g.ctl(ID_SEARCH), x, 169, left-126, 35)
+		move(g.ctl(ID_REFRESH), x+left-116, 169, 116, 35)
+		move(g.ctl(ID_SESSLIST), x, 218, left, h-256)
+		move(g.ctl(ID_GPT_LIST), x, 218, left, h-256)
+		for i,ratio:=range []int32{64,16,20}{send(g.ctl(ID_GPT_LIST),LVM_SETCOLUMNWIDTH,uintptr(i),uintptr(left*ratio/100))}
 		for i, ratio := range []int32{45, 21, 16, 18} {
 			send(g.ctl(ID_SESSLIST), LVM_SETCOLUMNWIDTH, uintptr(i), uintptr(left*ratio/100))
 		}
 		xr := x + left + 18
-		move(g.ctl(ID_HISTORY), xr, 236, right, h-538)
+		move(g.ctl(ID_HISTORY), xr, 267, right, h-569)
+		move(g.ctl(ID_GPT_HISTORY),xr,295,right,h-439)
+		move(g.ctl(ID_GPT_NEW),xr,h-103,right,39)
 		move(g.ctl(ID_MESSAGE), xr, h-251, right, 117)
 		move(g.ctl(ID_DATE), xr, h-117, right-365, 36)
 		move(g.ctl(ID_TIME), xr+right-356, h-117, 95, 36)
 		move(g.ctl(ID_SENDNOW), xr+right-251, h-117, 119, 36)
 		move(g.ctl(ID_SCHEDULE), xr+right-124, h-117, 124, 36)
-		for _, id := range []int{ID_SEARCH, ID_REFRESH, ID_SESSLIST, ID_HISTORY, ID_MESSAGE, ID_DATE, ID_TIME, ID_SENDNOW, ID_SCHEDULE} {
-			show(g.ctl(id), true)
+		for _,id:=range []int{ID_SEARCH,ID_REFRESH,ID_TAB_CODEX,ID_TAB_GPT}{show(g.ctl(id),true)}
+		if g.explorerTab==0 {
+			for _,id:=range []int{ID_SESSLIST,ID_HISTORY,ID_MESSAGE,ID_DATE,ID_TIME,ID_SENDNOW,ID_SCHEDULE}{show(g.ctl(id),true)}
+		} else {
+			for _,id:=range []int{ID_GPT_LIST,ID_GPT_HISTORY,ID_GPT_NEW}{show(g.ctl(id),true)}
 		}
 	case 1:
 		move(g.ctl(ID_JOBLIST), x, 138, area, h-247)
@@ -1201,7 +1233,7 @@ func main() {
 		core.SendDue()
 		return
 	}
-	g := &GUI{core: core, page: 0, W: 1350, H: 870, selected: -1}
+	g := &GUI{core: core, page: 0, W: 1350, H: 870, selected: -1, selectedChat:-1}
 	theme := core.store.Snapshot().Settings.Theme
 	g.dark = theme == "dark" || (theme == "system" && systemDark())
 	g.pal = palette(g.dark)
