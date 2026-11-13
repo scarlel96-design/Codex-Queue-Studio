@@ -40,6 +40,7 @@ type RelayWindow struct {
 	workSessions []internal.Session
 	apiChats []internal.ChatSession
 	models []internal.ModelOption
+	displayModels []internal.ModelOption
 	modelMu sync.Mutex
 	modelsLoading bool
 	modelError string
