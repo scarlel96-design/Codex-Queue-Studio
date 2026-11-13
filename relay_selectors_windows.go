@@ -54,7 +54,7 @@ func clippedLabel(value string, n int) string {
 func (r *RelayWindow) refreshSelectors() {
 	nextWork := r.parent.core.Snapshot()
 	nextChats := r.parent.core.ChatSessions()
-	if !reflect.DeepEqual(r.workSessions, nextWork) {
+	if !reflect.DeepEqual(r.workSessions, nextWork) || comboSelection(r.ctl(relayWork))<0 {
 		selectedID := r.workChoice()
 		if selectedID == "" {
 			if s, ok := r.parent.selectedSession(); ok {
@@ -71,7 +71,10 @@ func (r *RelayWindow) refreshSelectors() {
 				choice = i
 			}
 		}
-		if len(nextWork) > 0 {
+		if len(nextWork) == 0 {
+			addComboString(h, "조회된 Codex 작업 세션이 없습니다")
+			send(h, cbSetCurSel, 0, 0)
+		} else {
 			send(h, cbSetCurSel, uintptr(choice), 0)
 		}
 	}
