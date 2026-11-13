@@ -421,13 +421,14 @@ func (g *GUI) updateColors() {
 	call(dwm, "DwmSetWindowAttribute", g.hwnd, 20, uintptr(unsafe.Pointer(&dark)), unsafe.Sizeof(uint32(0)))
 	corners := uint32(2) // DWMWCP_ROUND; Windows 11 preserves native caption buttons.
 	call(dwm, "DwmSetWindowAttribute", g.hwnd, 33, uintptr(unsafe.Pointer(&corners)), unsafe.Sizeof(corners))
-	for _, id := range []int{ID_SESSLIST, ID_JOBLIST} {
+	for _, id := range []int{ID_SESSLIST, ID_GPT_LIST, ID_JOBLIST} {
 		h := g.ctl(id)
 		send(h, LVM_SETTEXTCOLOR, 0, uintptr(g.pal.text))
 		send(h, LVM_SETBKCOLOR, 0, uintptr(g.pal.card))
 		send(h, LVM_SETTEXTBKCOLOR, 0, uintptr(g.pal.card))
 	}
 	call(u32, "InvalidateRect", g.hwnd, 0, 1)
+	if activeRelayWindow!=nil && activeRelayWindow.hwnd!=0 {activeRelayWindow.updateThemeColors()}
 }
 func (g *GUI) layout() {
 	w, h := g.W, g.H
