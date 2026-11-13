@@ -4,6 +4,7 @@ import (
 	"context"
 	"errors"
 	"fmt"
+	"os"
 	"strings"
 	"time"
 
@@ -68,6 +69,10 @@ func (c *Core) runRelayOnce(ctx context.Context) {
 		if file=="" {continue}
 		completion,err:=internal.LatestCompletion(file)
 		if err!=nil || completion.TurnID=="" || completion.TurnID==rule.LastTurnID {continue}
+		if strings.TrimSpace(os.Getenv("OPENAI_API_KEY"))=="" {
+			c.setStatus("스마트 릴레이 대기: OPENAI_API_KEY 환경 변수가 필요합니다")
+			continue
+		}
 		// Reserve this turn before any network call; retries require user action.
 		if err:=c.store.Update(func(st *internal.State) error {
 			for i:=range st.Relays {
