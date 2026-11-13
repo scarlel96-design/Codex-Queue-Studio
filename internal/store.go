@@ -67,6 +67,7 @@ type State struct {
 	Jobs     []Job    `json:"jobs"`
 	Events   []Event  `json:"events"`
 	Relays   []RelayRule `json:"relays,omitempty"`
+	ChatSessions []ChatSession `json:"chatSessions,omitempty"`
 }
 
 type Store struct {
@@ -114,6 +115,7 @@ func (s *Store) Snapshot() State {
 	out.Jobs = append([]Job(nil), s.state.Jobs...)
 	out.Events = append([]Event(nil), s.state.Events...)
 	out.Relays = append([]RelayRule(nil), s.state.Relays...)
+	out.ChatSessions = append([]ChatSession(nil), s.state.ChatSessions...)
 	return out
 }
 
@@ -125,6 +127,7 @@ func (s *Store) Update(fn func(*State) error) error {
 	next.Jobs = append([]Job(nil), before.Jobs...)
 	next.Events = append([]Event(nil), before.Events...)
 	next.Relays = append([]RelayRule(nil), before.Relays...)
+	next.ChatSessions = append([]ChatSession(nil), before.ChatSessions...)
 	if err := fn(&next); err != nil {
 		return err
 	}
