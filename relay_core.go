@@ -16,9 +16,9 @@ func (c *Core) RelayRules() []internal.RelayRule {
 }
 
 // AddRelay starts at the current completed turn. It never replays old work.
-func (c *Core) AddRelay(sessionID, model, instructions string, sendBack, requireApproval bool) (string,error) {
+func (c *Core) AddRelay(sessionID, conversationID, model, instructions string, sendBack, requireApproval bool) (string,error) {
 	rule:=internal.RelayRule{
-		ID:internal.NewID(),WorkSessionID:sessionID,Model:strings.TrimSpace(model),
+		ID:internal.NewID(),WorkSessionID:sessionID,ConversationID:strings.TrimSpace(conversationID),Model:strings.TrimSpace(model),
 		Instructions:strings.TrimSpace(instructions),Enabled:true,SendBack:sendBack,
 		RequireApproval:requireApproval,MaxCycles:3,State:"idle",UpdatedAt:time.Now(),
 	}
