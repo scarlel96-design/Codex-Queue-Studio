@@ -19,6 +19,7 @@ import (
 type RelayRule struct {
 	ID string `json:"id"`
 	WorkSessionID string `json:"workSessionId"`
+	ProviderID string `json:"providerId,omitempty"`
 	ConversationID string `json:"conversationId,omitempty"`
 	Model string `json:"model"`
 	Instructions string `json:"instructions,omitempty"`
