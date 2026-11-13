@@ -6,6 +6,7 @@ import (
 	"context"
 	"fmt"
 	"reflect"
+	"sync"
 	"strings"
 	"syscall"
 	"time"
@@ -36,6 +37,12 @@ type RelayWindow struct {
 	controls map[int]uintptr
 	rules []internal.RelayRule
 	selectedID string
+	workSessions []internal.Session
+	apiChats []internal.ChatSession
+	models []internal.ModelOption
+	modelMu sync.Mutex
+	modelsLoading bool
+	modelError string
 }
 
 var activeRelayWindow *RelayWindow
@@ -50,17 +57,17 @@ func (r *RelayWindow) control(id int,class,title string,style uintptr) {
 
 func (r *RelayWindow) init() {
 	r.controls=map[int]uintptr{}
-	for _,id:=range []int{relayWork,relayConversation,relayModel,relayInstructions,relayPreview} {
+	for _,id:=range []int{relayInstructions,relayPreview} {
 		style:=uintptr(WS_TABSTOP|0x0080)
 		if id==relayInstructions || id==relayPreview {style=WS_TABSTOP|ES_MULTILINE|ES_AUTOVSCROLL|WS_VSCROLL}
 		r.control(id,"EDIT","",style)
 	}
-	send(r.ctl(relayWork),EM_SETREADONLY,1,0)
 	send(r.ctl(relayPreview),EM_SETREADONLY,1,0)
 	r.control(relaySendBack,"BUTTON","AI 답변을 원래 Codex 세션으로 다시 전송",WS_TABSTOP|0x3)
 	r.control(relayApproval,"BUTTON","재전송 전에 사용자 승인 받기",WS_TABSTOP|0x3)
 	send(r.ctl(relayApproval),0x00F1,1,0) // BM_SETCHECK
 	r.control(relayCreate,"BUTTON","새 자동화 규칙 생성",WS_TABSTOP|0x1)
+	r.initializeSelectors()
 	r.control(relayToggle,"BUTTON","규칙 활성화 / 일시 정지",WS_TABSTOP)
 	r.control(relayApprove,"BUTTON","검토 답변 승인 및 전달",WS_TABSTOP)
 	r.control(relayRules,"SysListView32","",WS_TABSTOP|LVS_REPORT|LVS_SINGLESEL|LVS_SHOWSELALWAYS|LVS_OWNERDATA)
@@ -70,8 +77,6 @@ func (r *RelayWindow) init() {
 		c:=LVCOLUMNW{Mask:0x7,CX:col.width,Text:utf(col.title),SubItem:int32(i)}
 		send(h,LVM_INSERTCOLUMNW,uintptr(i),uintptr(unsafe.Pointer(&c)))
 	}
-	if s,ok:=r.parent.selectedSession();ok {settext(r.ctl(relayWork),s.ID)}
-	settext(r.ctl(relayModel),"gpt-5.4")
 	settext(r.ctl(relayPreview),"규칙을 선택하면 실행 상태와 AI 답변을 확인할 수 있습니다.")
 	r.resize()
 	r.refresh()
@@ -88,9 +93,10 @@ func (r *RelayWindow) resize() {
 	formW:=left-64
 	rightX:=left+26
 	rightW:=w-rightX-36
-	move(r.ctl(relayWork),x,176,formW,35)
-	move(r.ctl(relayConversation),x,249,formW,35)
-	move(r.ctl(relayModel),x,322,formW,35)
+	move(r.ctl(relayWork),x,176,formW,260)
+	move(r.ctl(relayConversation),x,249,formW,260)
+	move(r.ctl(relayModel),x,322,formW-147,260)
+	move(r.ctl(relayModelRefresh),x+formW-137,322,137,35)
 	move(r.ctl(relayInstructions),x,394,formW,124)
 	move(r.ctl(relaySendBack),x,545,formW,28)
 	move(r.ctl(relayApproval),x,582,formW,28)
@@ -103,6 +109,7 @@ func (r *RelayWindow) resize() {
 }
 
 func (r *RelayWindow) refresh() {
+	r.refreshSelectors()
 	next:=r.parent.core.RelayRules()
 	if reflect.DeepEqual(r.rules,next) {return}
 	old:=r.rules
@@ -162,10 +169,14 @@ func (r *RelayWindow) ask(message string) bool {
 
 func (r *RelayWindow) click(id int) {
 	switch id {
+	case relayModelRefresh:
+		r.requestModels()
 	case relayCreate:
-		work:=strings.TrimSpace(gettext(r.ctl(relayWork)))
-		conv:=strings.TrimSpace(gettext(r.ctl(relayConversation)))
-		model:=strings.TrimSpace(gettext(r.ctl(relayModel)))
+		work:=r.workChoice()
+		conv:=r.conversationChoice()
+		model:=r.modelChoice()
+		if work=="" {r.alert("Codex 작업 세션을 선택하세요");return}
+		if model=="" {r.alert("계정에서 조회한 검토 모델을 선택하세요. 먼저 모델 새로고침을 실행하세요");return}
 		instructions:=strings.TrimSpace(gettext(r.ctl(relayInstructions)))
 		back:=send(r.ctl(relaySendBack),0x00F0,0,0)!=0
 		approval:=send(r.ctl(relayApproval),0x00F0,0,0)!=0
@@ -234,9 +245,9 @@ func (r *RelayWindow) draw(hdc uintptr) {
 	drawText(hdc,"스마트 릴레이",RECT{32,24,r.W-30,68},p.text,r.parent.heading,DT_SINGLELINE)
 	drawText(hdc,"Codex 완료 → OpenAI API 대화 검토 → 선택한 경우 원래 Codex로 답변 전달",RECT{34,73,r.W-28,104},p.muted,r.parent.font,DT_SINGLELINE)
 	for _,item:=range []struct{label string;y int32}{
-		{"Codex 작업 세션 UUID",149},
-		{"OpenAI API Conversation ID · 비우면 새로 생성",222},
-		{"검토 모델",295},
+		{"Codex 작업 세션 · 목록에서 선택",149},
+		{"GPT API 대화 · 새 대화 생성 또는 기존 대화 선택",222},
+		{"검토 모델 · 계정에서 실시간 조회",295},
 		{"검토 지침 · 선택 사항",367},
 	} {
 		drawText(hdc,item.label,RECT{42,item.y,left-20,item.y+26},p.muted,r.parent.small,DT_SINGLELINE)
@@ -244,7 +255,7 @@ func (r *RelayWindow) draw(hdc uintptr) {
 	drawText(hdc,"연동 규칙 및 상태",RECT{rightX,143,r.W-26,170},p.text,r.parent.bold,DT_SINGLELINE)
 	drawText(hdc,"선택한 규칙의 AI 검토 결과",RECT{rightX,r.H-323,r.W-26,r.H-294},p.muted,r.parent.small,DT_SINGLELINE)
 	drawText(hdc,"기존 ChatGPT 앱 채팅 ID는 API Conversation ID와 다릅니다.",RECT{42,r.H-102,left-20,r.H-61},p.muted,r.parent.small,DT_SINGLELINE)
-	drawText(hdc,"API 키는 OPENAI_API_KEY 환경 변수로 설정합니다.",RECT{42,r.H-68,left-20,r.H-32},p.muted,r.parent.small,DT_SINGLELINE)
+	drawText(hdc,"API 키: OPENAI_API_KEY · "+r.selectedSummary(),RECT{42,r.H-68,left-20,r.H-32},p.muted,r.parent.small,DT_SINGLELINE|DT_END_ELLIPSIS)
 }
 
 func relayWndProc(hwnd,msg,w,l uintptr) uintptr {
@@ -264,7 +275,7 @@ func relayWndProc(hwnd,msg,w,l uintptr) uintptr {
 		r.draw(hdc)
 		call(u32,"EndPaint",hwnd,uintptr(unsafe.Pointer(&ps)))
 		return 0
-	case WM_CTLCOLOREDIT,WM_CTLCOLORSTATIC:
+	case WM_CTLCOLOREDIT,WM_CTLCOLORSTATIC,0x0134:
 		call(g32,"SetTextColor",w,uintptr(r.parent.pal.text))
 		call(g32,"SetBkColor",w,uintptr(r.parent.pal.field))
 		return r.parent.brushField
@@ -273,6 +284,8 @@ func relayWndProc(hwnd,msg,w,l uintptr) uintptr {
 		return 0
 	case relayWMUpdated:
 		r.refresh();return 0
+	case relayWMModels:
+		r.showModels();return 0
 	case WM_NOTIFY:
 		r.notify(l);return 0
 	case WM_COMMAND:
