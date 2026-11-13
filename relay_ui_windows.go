@@ -435,7 +435,7 @@ func openRelayWindow(parent *GUI) {
 	wc := WNDCLASSEX{Size: uint32(unsafe.Sizeof(WNDCLASSEX{})), WndProc: syscall.NewCallback(relayWndProc),
 		Instance: call(k32, "GetModuleHandleW", 0), Cursor: call(u32, "LoadCursorW", 0, IDC_ARROW), ClassName: cls, Icon: parent.icon, SmallIcon: parent.icon}
 	call(u32, "RegisterClassExW", uintptr(unsafe.Pointer(&wc)))
-	h := createWindow("CQSRelayNativeV1", "Codex Queue Studio · 스마트 릴레이", WS_OVERLAPPEDWINDOW, 0, 0, 0, 100, 80, 1180, 790)
+	h := createWindow("CQSRelayNativeV1", "Codex Queue Studio · 스마트 릴레이", WS_OVERLAPPEDWINDOW, 0, parent.hwnd, 0, 100, 80, 1180, 790)
 	if h == 0 {
 		activeRelayWindow = nil
 		parent.alert("스마트 릴레이 창을 만들지 못했습니다")
