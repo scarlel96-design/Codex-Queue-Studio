@@ -28,6 +28,7 @@ type Core struct {
 	store    *internal.Store
 	mu       sync.Mutex
 	sendMu   sync.Mutex
+	relayMu  sync.Mutex
 	sessions []internal.Session
 	status   string
 	update   *UpdateInfo
@@ -307,6 +308,22 @@ func (c *Core) Run() {
 			select {
 			case <-t.C:
 				c.SendDue()
+			case <-c.stop:
+				return
+			}
+		}
+	}()
+	go func() {
+		// External Codex Desktop completions are observed from local rollout files.
+		// Network calls never run on the Win32 UI message thread.
+		t := time.NewTicker(10*time.Second)
+		defer t.Stop()
+		for {
+			select {
+			case <-t.C:
+				ctx,cancel:=context.WithTimeout(context.Background(),3*time.Minute)
+				c.runRelayOnce(ctx)
+				cancel()
 			case <-c.stop:
 				return
 			}
