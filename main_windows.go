@@ -917,7 +917,7 @@ func (g *GUI) drawButton(dis *DRAWITEMSTRUCT) {
 		fg = p.muted
 	}
 	roundBox(hdc, RECT{2, 2, dis.Rect.Right - dis.Rect.Left - 2, dis.Rect.Bottom - dis.Rect.Top - 2}, bg)
-	if selected {
+	if selected && id!=ID_TAB_CODEX && id!=ID_TAB_GPT {
 		roundBox(hdc, RECT{4, 8, 8, dis.Rect.Bottom - dis.Rect.Top - 8}, p.accent)
 	}
 	labels := map[int]string{ID_SESSIONS: "세션 탐색기", ID_JOBS: "예약 관리", ID_SETTINGS: "환경 설정", ID_RELAY_PAGE: "스마트 릴레이", ID_TAB_CODEX:"Codex 작업",ID_TAB_GPT:"GPT 채팅",ID_GPT_NEW:"새 GPT API 대화", ID_THEME: "◐   테마 전환", ID_REFRESH: "새로고침", ID_SENDNOW: "지금 전송", ID_SCHEDULE: "예약 등록", ID_CANCEL: "예약 취소", ID_REACTIVATE: "선택 예약 재개", ID_ENGINE: "Codex 엔진 설치", ID_CHECK: "업데이트 확인", ID_UPDATE: "업데이트 설치", ID_SAVE: "경로 적용", ID_EXIT: "완전히 종료"}
