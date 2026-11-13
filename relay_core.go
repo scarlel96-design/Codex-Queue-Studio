@@ -18,8 +18,12 @@ func (c *Core) RelayRules() []internal.RelayRule {
 
 // AddRelay starts at the current completed turn. It never replays old work.
 func (c *Core) AddRelay(sessionID, conversationID, model, instructions string, sendBack, requireApproval bool) (string,error) {
+	return c.AddRelayForProvider("openai",sessionID,conversationID,model,instructions,sendBack,requireApproval)
+}
+func (c *Core) AddRelayForProvider(providerID,sessionID,conversationID,model,instructions string,sendBack,requireApproval bool)(string,error) {
+	if _,ok:=c.chatProviders().Get(providerID);!ok{return "",errors.New("등록되지 않은 AI 제공자입니다")}
 	rule:=internal.RelayRule{
-		ID:internal.NewID(),WorkSessionID:sessionID,ConversationID:strings.TrimSpace(conversationID),Model:strings.TrimSpace(model),
+		ID:internal.NewID(),WorkSessionID:sessionID,ProviderID:providerID,ConversationID:strings.TrimSpace(conversationID),Model:strings.TrimSpace(model),
 		Instructions:strings.TrimSpace(instructions),Enabled:true,SendBack:sendBack,
 		RequireApproval:requireApproval,MaxCycles:3,State:"idle",UpdatedAt:time.Now(),
 	}
@@ -90,7 +94,14 @@ func (c *Core) runRelayOnce(ctx context.Context) {
 		if file=="" {continue}
 		completion,err:=internal.LatestCompletion(file)
 		if err!=nil || completion.TurnID=="" || completion.TurnID==rule.LastTurnID {continue}
-		if strings.TrimSpace(os.Getenv("OPENAI_API_KEY"))=="" {
+		providerID:=rule.ProviderID
+		if providerID==""{providerID="openai"} // Backward-compatible v3.3.0 rules.
+		provider,ok:=c.chatProviders().Get(providerID)
+		if !ok {
+			c.setStatus("스마트 릴레이 대기: 연결된 AI 제공자가 없습니다: "+providerID)
+			continue
+		}
+		if providerID=="openai" && strings.TrimSpace(os.Getenv("OPENAI_API_KEY"))=="" {
 			c.setStatus("스마트 릴레이 대기: OPENAI_API_KEY 환경 변수가 필요합니다")
 			continue
 		}
@@ -106,10 +117,9 @@ func (c *Core) runRelayOnce(ctx context.Context) {
 			}
 			return errors.New("자동화 상태가 변경되었습니다")
 		});err!=nil {continue}
-		client:=internal.NewResponsesClientFromEnvironment()
 		convID:=rule.ConversationID
 		if convID=="" {
-			convID,err=client.CreateConversation(ctx)
+			convID,err=provider.CreateConversation(ctx)
 			if err==nil {
 				err=c.store.Update(func(st *internal.State) error {
 					for i:=range st.Relays {if st.Relays[i].ID==rule.ID && st.Relays[i].State=="reviewing" {st.Relays[i].ConversationID=convID;return nil}}
@@ -118,11 +128,11 @@ func (c *Core) runRelayOnce(ctx context.Context) {
 			}
 		}
 		if err==nil {
-			err=c.RegisterChat("openai",convID,"Codex 검토 · "+rule.WorkSessionID[:min(8,len(rule.WorkSessionID))])
+			err=c.RegisterChat(providerID,convID,"Codex 검토 · "+rule.WorkSessionID[:min(8,len(rule.WorkSessionID))])
 		}
 		var reply string
 		if err==nil {
-			reply,err=client.Review(ctx,convID,rule.Model,completion.Message,rule.Instructions)
+			reply,err=provider.Review(ctx,convID,rule.Model,completion.Message,rule.Instructions)
 		}
 		if err!=nil {
 			c.relayUncertain(rule.ID,"AI 채팅 검토 결과를 확인할 수 없습니다: "+err.Error())
