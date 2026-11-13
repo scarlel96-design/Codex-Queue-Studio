@@ -20,7 +20,7 @@ jobs:
         run: |
           $ErrorActionPreference = 'Stop'
           $version = (Get-Content '.release-candidate' -Raw).Trim()
-          if ($version -notmatch '^3\.3\.0$') { throw 'Only the validated 3.3.0 preview is enabled' }
+          if ($version -notmatch '^3\.4\.0$') { throw 'Only the validated 3.4.0 preview is enabled' }
           $source = Get-Content core.go -Raw
           if (!$source.Contains('const AppVersion = "' + $version + '"')) { throw 'Version mismatch' }
           "RELEASE_TAG=v$version" | Out-File -FilePath $env:GITHUB_ENV -Encoding utf8 -Append
@@ -93,7 +93,7 @@ jobs:
           name: Codex Queue Studio ${{ env.RELEASE_TAG }} Preview
           prerelease: true
           make_latest: false
-          body_path: docs/RELEASE_3_3.md
+          body_path: docs/RELEASE_3_4.md
           fail_on_unmatched_files: true
           files: |
             CodexQueueStudio-Windows-x64.zip
