@@ -118,6 +118,7 @@ const (
 	ID_TIME                      = 122
 	ID_REACTIVATE                = 123
 	ID_RELEASE_NOTES             = 124
+	ID_RELAY_PAGE                = 125
 	EM_SETREADONLY               = 0x00CF
 )
 
@@ -348,7 +349,7 @@ func (g *GUI) initControls() {
 	for _, b := range []struct {
 		id    int
 		title string
-	}{{ID_SESSIONS, "세션 탐색기"}, {ID_JOBS, "예약 관리"}, {ID_SETTINGS, "환경 설정"}, {ID_THEME, "테마 전환"}, {ID_REFRESH, "새로고침"}, {ID_SENDNOW, "지금 전송"}, {ID_SCHEDULE, "예약 등록"}, {ID_CANCEL, "예약 취소"}, {ID_REACTIVATE, "선택 예약 재개"}, {ID_ENGINE, "Codex 엔진 설치"}, {ID_CHECK, "업데이트 확인"}, {ID_UPDATE, "업데이트 설치"}, {ID_SAVE, "경로 적용"}, {ID_EXIT, "완전히 종료"}} {
+	}{{ID_SESSIONS, "세션 탐색기"}, {ID_JOBS, "예약 관리"}, {ID_RELAY_PAGE, "스마트 릴레이"}, {ID_SETTINGS, "환경 설정"}, {ID_THEME, "테마 전환"}, {ID_REFRESH, "새로고침"}, {ID_SENDNOW, "지금 전송"}, {ID_SCHEDULE, "예약 등록"}, {ID_CANCEL, "예약 취소"}, {ID_REACTIVATE, "선택 예약 재개"}, {ID_ENGINE, "Codex 엔진 설치"}, {ID_CHECK, "업데이트 확인"}, {ID_UPDATE, "업데이트 설치"}, {ID_SAVE, "경로 적용"}, {ID_EXIT, "완전히 종료"}} {
 		g.button(b.id, b.title)
 	}
 	g.edit(ID_SEARCH, false)
@@ -419,7 +420,7 @@ func (g *GUI) layout() {
 	side := int32(208)
 	x := side + 25
 	area := w - x - 24
-	for i, id := range []int{ID_SESSIONS, ID_JOBS, ID_SETTINGS} {
+	for i, id := range []int{ID_SESSIONS, ID_JOBS, ID_RELAY_PAGE, ID_SETTINGS} {
 		move(g.ctl(id), 14, 112+int32(i)*51, 180, 40)
 	}
 	move(g.ctl(ID_THEME), 14, h-130, 180, 38)
@@ -655,6 +656,8 @@ func (g *GUI) handleButton(id int) {
 		g.setPage(1)
 	case ID_SETTINGS:
 		g.setPage(2)
+	case ID_RELAY_PAGE:
+		openRelayWindow(g)
 	case ID_THEME:
 		g.dark = !g.dark
 		chosen := "light"
@@ -869,7 +872,7 @@ func (g *GUI) drawButton(dis *DRAWITEMSTRUCT) {
 	if selected {
 		roundBox(hdc, RECT{4, 8, 8, dis.Rect.Bottom - dis.Rect.Top - 8}, p.accent)
 	}
-	labels := map[int]string{ID_SESSIONS: "세션 탐색기", ID_JOBS: "예약 관리", ID_SETTINGS: "환경 설정", ID_THEME: "◐   테마 전환", ID_REFRESH: "새로고침", ID_SENDNOW: "지금 전송", ID_SCHEDULE: "예약 등록", ID_CANCEL: "예약 취소", ID_REACTIVATE: "선택 예약 재개", ID_ENGINE: "Codex 엔진 설치", ID_CHECK: "업데이트 확인", ID_UPDATE: "업데이트 설치", ID_SAVE: "경로 적용", ID_EXIT: "완전히 종료"}
+	labels := map[int]string{ID_SESSIONS: "세션 탐색기", ID_JOBS: "예약 관리", ID_SETTINGS: "환경 설정", ID_RELAY_PAGE: "스마트 릴레이", ID_THEME: "◐   테마 전환", ID_REFRESH: "새로고침", ID_SENDNOW: "지금 전송", ID_SCHEDULE: "예약 등록", ID_CANCEL: "예약 취소", ID_REACTIVATE: "선택 예약 재개", ID_ENGINE: "Codex 엔진 설치", ID_CHECK: "업데이트 확인", ID_UPDATE: "업데이트 설치", ID_SAVE: "경로 적용", ID_EXIT: "완전히 종료"}
 	text := labels[id]
 	r := RECT{7, 0, dis.Rect.Right - dis.Rect.Left - 7, dis.Rect.Bottom - dis.Rect.Top}
 	drawText(hdc, text, r, fg, g.font, DT_CENTER|DT_SINGLELINE|DT_VCENTER)
