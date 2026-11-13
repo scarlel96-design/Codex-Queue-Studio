@@ -169,6 +169,7 @@ func (r *RelayWindow) click(id int) {
 		instructions:=strings.TrimSpace(gettext(r.ctl(relayInstructions)))
 		back:=send(r.ctl(relaySendBack),0x00F0,0,0)!=0
 		approval:=send(r.ctl(relayApproval),0x00F0,0,0)!=0
+		if !r.ask("작업 완료 보고가 OpenAI API로 전송됩니다. ChatGPT 구독과 별도의 API 사용 요금이 발생할 수 있습니다. 규칙을 생성할까요?"){return}
 		if back && !approval && !r.ask("사용자 승인 없이 AI 답변이 Codex 작업 세션으로 전달됩니다. 최대 3회 반복합니다. 활성화할까요?"){return}
 		id,err:=r.parent.core.AddRelay(work,conv,model,instructions,back,approval)
 		if err!=nil{r.alert(err.Error());return}
@@ -176,7 +177,12 @@ func (r *RelayWindow) click(id int) {
 		r.refresh()
 	case relayToggle:
 		rule,ok:=r.selected();if !ok{r.alert("규칙을 선택하세요");return}
-		if err:=r.parent.core.SetRelayEnabled(rule.ID,!rule.Enabled);err!=nil{r.alert(err.Error())}
+		if rule.State=="uncertain" {
+			if !r.ask("이전 요청의 결과를 확인하지 못했습니다. 중복 전송을 방지하기 위해 해당 턴을 건너뛰고 다음 작업 완료부터 다시 감시할까요?"){return}
+			if err:=r.parent.core.AcknowledgeRelayUncertain(rule.ID);err!=nil{r.alert(err.Error())}
+		} else {
+			if err:=r.parent.core.SetRelayEnabled(rule.ID,!rule.Enabled);err!=nil{r.alert(err.Error())}
+		}
 		r.refresh()
 	case relayApprove:
 		rule,ok:=r.selected();if !ok{r.alert("규칙을 선택하세요");return}
