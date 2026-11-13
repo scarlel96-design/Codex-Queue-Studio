@@ -160,13 +160,9 @@ func (g *GUI) drawExplorerTabs(hdc uintptr) {
 	p:=g.pal
 	x:=int32(233)
 	// A compact two-option segmented control. Native Windows caption remains.
-	roundBox(hdc,RECT{x-4,115,x+306,159},p.field)
-	if g.tabMotionPosition<0 {g.tabMotionPosition=0}
-	if g.tabMotionPosition>1 {g.tabMotionPosition=1}
+	roundBox(hdc,RECT{x-4,115,x+306,162},p.field)
 	offset:=int32(g.tabMotionPosition*150)
-	roundBox(hdc,RECT{x+offset,119,x+149+offset,154},p.card)
-	drawText(hdc,"Codex 작업",RECT{x+8,121,x+145,151},func()uint32{if g.explorerTab==0{return p.accent};return p.muted}(),g.font,DT_CENTER|DT_VCENTER|DT_SINGLELINE)
-	drawText(hdc,"GPT 채팅",RECT{x+158,121,x+293,151},func()uint32{if g.explorerTab==1{return p.accent};return p.muted}(),g.font,DT_CENTER|DT_VCENTER|DT_SINGLELINE)
+	roundBox(hdc,RECT{x+16+offset,157,x+134+offset,161},p.accent)
 }
 
 func (g *GUI) drawGPTInspector(hdc uintptr,xr,right int32) {
