@@ -6,6 +6,7 @@ import (
 	"context"
 	"fmt"
 	"reflect"
+	"syscall"
 	"strings"
 	"time"
 	"unsafe"
@@ -206,12 +207,7 @@ func (g *GUI) handleGPTNotify(l uintptr) bool {
 	return false
 }
 
-func syscallUTF16(text string) []uint16 {
-	ptr:=utf(text)
-	_ = ptr
-	// Kept inside the Win32 view adapter to avoid coupling core packages to UTF-16.
-	return syscall.StringToUTF16(text)
-}
+func syscallUTF16(text string) []uint16 {return syscall.StringToUTF16(text)}
 
 func (g *GUI) refreshGPTHistoryView() {
 	g.chatMu.Lock()
