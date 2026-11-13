@@ -34,8 +34,10 @@ func (c *Core) ChatSessions() []internal.ChatSession {
 	for _,r:=range snap.Relays{
 		if r.ConversationID=="" {continue}
 		if _,exists:=existing[r.ConversationID];exists {continue}
+		providerID:=r.ProviderID
+		if providerID==""{providerID="openai"}
 		existing[r.ConversationID]=internal.ChatSession{
-			ID:r.ConversationID,ProviderID:"openai",
+			ID:r.ConversationID,ProviderID:providerID,
 			Title:"Codex 검토 · "+r.WorkSessionID[:min(8,len(r.WorkSessionID))],
 			CreatedAt:r.UpdatedAt,UpdatedAt:r.UpdatedAt,
 		}
