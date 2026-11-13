@@ -10,6 +10,7 @@ import (
 	"os/exec"
 	"path/filepath"
 	"runtime"
+	"reflect"
 	"strconv"
 	"strings"
 	"sync"
@@ -311,6 +312,8 @@ type GUI struct {
 	updateMu                       sync.Mutex
 	updateView                     updateDisplay
 	healthyTicks                   int
+	refreshing                    atomic.Bool
+	lastStatus                    string
 }
 
 func (g *GUI) ctl(id int) uintptr { return g.controls[id] }
@@ -487,51 +490,87 @@ func (g *GUI) setPage(p int) {
 	call(u32, "InvalidateRect", g.hwnd, 0, 1)
 }
 func (g *GUI) refreshSessions() {
-	previousID := ""
-	if g.selected >= 0 && g.selected < len(g.visible) {
-		previousID = g.visible[g.selected].ID
-	}
+	oldID := ""
+	if g.selected >= 0 && g.selected < len(g.visible) { oldID = g.visible[g.selected].ID }
 	search := strings.ToLower(strings.TrimSpace(gettext(g.ctl(ID_SEARCH))))
 	all := g.core.Snapshot()
-	g.sessions = all
-	g.visible = g.visible[:0]
-	for _, s := range all {
-		if search == "" || strings.Contains(strings.ToLower(s.Title+" "+s.Project+" "+s.ID+" "+s.Path), search) {
-			g.visible = append(g.visible, s)
+	oldCount := len(g.sessions)
+	next := make([]internal.Session,0,len(all))
+	for _,v := range all {
+		if search=="" || strings.Contains(strings.ToLower(v.Title+" "+v.Project+" "+v.ID+" "+v.Path),search) {
+			next=append(next,v)
+			if len(next)>=5000 { break }
 		}
 	}
-	if len(g.visible) > 5000 {
-		g.visible = g.visible[:5000]
+	g.sessions=all
+	if reflect.DeepEqual(g.visible,next) {
+		if oldCount!=len(all) { g.invalidateSummary() }
+		return
 	}
-	send(g.ctl(ID_SESSLIST), LVM_SETITEMCOUNT, uintptr(len(g.visible)), 0)
-	g.selected = -1
-	for idx, item := range g.visible {
-		if item.ID == previousID {
-			g.selected = idx
-			state := LVITEMW{StateMask: 3, State: 3}
-			send(g.ctl(ID_SESSLIST), LVM_FIRST+43, uintptr(idx), uintptr(unsafe.Pointer(&state)))
-			break
+	old:=g.visible
+	g.visible=next
+	h:=g.ctl(ID_SESSLIST)
+	if len(old)!=len(next) {
+		send(h,LVM_SETITEMCOUNT,uintptr(len(next)),3) // LVM_SETITEMCOUNT with NOINVALIDATEALL | NOSCROLL
+		call(u32,"InvalidateRect",h,0,0)
+	} else {
+		start,last:=-1,-1
+		for i:=range next {
+			if old[i]==next[i] {
+				if start>=0 {send(h,LVM_FIRST+21,uintptr(start),uintptr(last));start=-1}
+			} else {
+				if start<0 {start=i}
+				last=i
+			}
 		}
+		if start>=0 {send(h,LVM_FIRST+21,uintptr(start),uintptr(last))}
 	}
-	call(u32, "InvalidateRect", g.ctl(ID_SESSLIST), 0, 1)
-	call(u32, "InvalidateRect", g.hwnd, 0, 1)
+	prevSelected:=g.selected
+	g.selected=-1
+	for i,v:=range next { if v.ID==oldID {g.selected=i;break} }
+	if prevSelected!=g.selected {
+		item:=LVITEMW{StateMask:3}
+		send(h,LVM_FIRST+43,^uintptr(0),uintptr(unsafe.Pointer(&item)))
+		if g.selected>=0 {item.State=3;send(h,LVM_FIRST+43,uintptr(g.selected),uintptr(unsafe.Pointer(&item)))}
+	}
+	g.invalidateSummary()
+}
+func (g *GUI) invalidateSummary() {
+	r:=RECT{Left:230,Top:105,Right:g.W-28,Bottom:164}
+	call(u32,"InvalidateRect",g.hwnd,uintptr(unsafe.Pointer(&r)),0)
+}
+func (g *GUI) refreshStatusRail() {
+	status:=g.core.Status()
+	if status==g.lastStatus { return }
+	g.lastStatus=status
+	r:=RECT{Left:233,Top:g.H-40,Right:g.W-24,Bottom:g.H}
+	call(u32,"InvalidateRect",g.hwnd,uintptr(unsafe.Pointer(&r)),0)
 }
 func (g *GUI) refreshJobs() {
-	g.jobs = g.core.Pending()
-	send(g.ctl(ID_JOBLIST), LVM_SETITEMCOUNT, uintptr(len(g.jobs)), 0)
-	call(u32, "InvalidateRect", g.ctl(ID_JOBLIST), 0, 1)
-	call(u32, "InvalidateRect", g.hwnd, 0, 1)
+	next:=g.core.Pending()
+	if reflect.DeepEqual(g.jobs,next) {return}
+	old:=g.jobs
+	g.jobs=next
+	h:=g.ctl(ID_JOBLIST)
+	if len(old)!=len(next) {
+		send(h,LVM_SETITEMCOUNT,uintptr(len(next)),3)
+		call(u32,"InvalidateRect",h,0,0)
+		return
+	}
+	for i:=range next {if old[i]!=next[i] {send(h,LVM_FIRST+21,uintptr(i),uintptr(i))}}
 }
 func (g *GUI) asyncRefresh() {
+	if !g.refreshing.CompareAndSwap(false,true) {return}
 	g.core.setStatus("세션 검색 중")
 	go func() {
-		ctx, cancel := context.WithTimeout(context.Background(), 30*time.Second)
+		defer g.refreshing.Store(false)
+		ctx,cancel:=context.WithTimeout(context.Background(),30*time.Second)
 		defer cancel()
-		if err := g.core.RefreshLocal(); err == nil {
-			call(u32, "PostMessageW", g.hwnd, WM_APP+1, 0, 0)
-			_ = g.core.MergeRemote(ctx)
+		if err:=g.core.RefreshLocal();err==nil {
+			call(u32,"PostMessageW",g.hwnd,WM_APP+1,0,0)
+			_=g.core.MergeRemote(ctx)
 		}
-		call(u32, "PostMessageW", g.hwnd, WM_APP+1, 0, 0)
+		call(u32,"PostMessageW",g.hwnd,WM_APP+1,0,0)
 	}()
 }
 func (g *GUI) selectedSession() (internal.Session, bool) {
@@ -969,16 +1008,14 @@ func mainWndProc(hwnd, msg, w, l uintptr) uintptr {
 			return 0
 		}
 		if w == 1 {
-			if g.page == 1 {
-				g.refreshJobs()
-			}
-			call(u32, "InvalidateRect", g.hwnd, 0, 1)
+			if g.page == 1 { g.refreshJobs() }
+			g.refreshStatusRail()
 		}
 		return 0
 	case WM_APP + 1:
 		g.refreshSessions()
 		g.refreshJobs()
-		call(u32, "InvalidateRect", hwnd, 0, 1)
+		g.refreshStatusRail()
 		return 0
 	case WM_APP + 2:
 		g.core.mu.Lock()
