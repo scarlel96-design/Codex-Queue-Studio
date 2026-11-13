@@ -42,7 +42,7 @@ func TestResponsesClientUsesSeparateConversationAndParsesReview(t *testing.T) {
 		}
 	}))
 	defer srv.Close()
-	client:=ResponsesClient{Key:"test-token",BaseURL:srv.URL,HTTP:srv.Client()}
+	client:=ResponsesClient{Key:"test-token",BaseURL:srv.URL+"/v1",HTTP:srv.Client()}
 	conv,err:=client.CreateConversation(context.Background());if err!=nil{t.Fatal(err)}
 	reply,err:=client.Review(context.Background(),conv,"test-model","Codex report","")
 	if err!=nil{t.Fatal(err)}
