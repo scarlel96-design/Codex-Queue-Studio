@@ -58,6 +58,27 @@ func (c *Core) SetRelayEnabled(id string,enabled bool) error {
 	})
 }
 
+// AcknowledgeRelayUncertain skips the reserved turn. It never retries that request.
+func (c *Core) AcknowledgeRelayUncertain(id string) error {
+	return c.store.Update(func(st *internal.State) error {
+		for i:=range st.Relays {
+			r:=&st.Relays[i]
+			if r.ID!=id {continue}
+			if r.State!="uncertain" {return errors.New("결과 불명 상태가 아닙니다")}
+			if r.CompletedCycles>=r.MaxCycles {
+				r.State="paused";r.Enabled=false
+			} else {
+				r.State="idle";r.Enabled=true
+			}
+			r.LastError=""
+			r.UpdatedAt=time.Now()
+			internal.AddEvent(st,"relay-skipped",id,"사용자 확인 후 불명확한 턴을 재전송 없이 건너뛰었습니다")
+			return nil
+		}
+		return errors.New("자동화 규칙을 찾을 수 없습니다")
+	})
+}
+
 // runRelayOnce never retries uncertain delivery automatically.
 func (c *Core) runRelayOnce(ctx context.Context) {
 	if !c.relayMu.TryLock(){return}
