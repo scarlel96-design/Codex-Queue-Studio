@@ -75,7 +75,7 @@ func (r *RelayWindow) refreshSelectors() {
 			send(h, cbSetCurSel, uintptr(choice), 0)
 		}
 	}
-	if !reflect.DeepEqual(r.apiChats, nextChats) {
+	if !reflect.DeepEqual(r.apiChats, nextChats) || comboSelection(r.ctl(relayConversation))<0 {
 		selectedID := r.conversationChoice()
 		if selectedID == "" && r.parent.explorerTab == 1 && r.parent.selectedChat >= 0 && r.parent.selectedChat < len(r.parent.visibleChats) {
 			selectedID = r.parent.visibleChats[r.parent.selectedChat].ID
