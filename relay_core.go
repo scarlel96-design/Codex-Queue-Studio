@@ -104,11 +104,9 @@ func (c *Core) runRelayOnce(ctx context.Context) {
 			c.relayUncertain(rule.ID,"AI 채팅 검토 결과를 확인할 수 없습니다: "+err.Error())
 			continue
 		}
-		cipher:=""
-		if rule.SendBack {
-			cipher,err=internal.SealMessage(reply)
-			if err!=nil {c.relayUncertain(rule.ID,err.Error());continue}
-		}
+		// Keep the reviewed reply encrypted even when return delivery is disabled.
+		cipher,err:=internal.SealMessage(reply)
+		if err!=nil {c.relayUncertain(rule.ID,err.Error());continue}
 		state:="idle"
 		if rule.CompletedCycles+1>=rule.MaxCycles {state="paused"}
 		if rule.SendBack {
@@ -180,7 +178,7 @@ func (c *Core) deliverRelayReply(ctx context.Context,id,workSessionID,cipher str
 		for i:=range st.Relays {
 			r:=&st.Relays[i]
 			if r.ID==id && r.State=="reply-sending" {
-				r.ReplyCipher=""
+				// Preserve the encrypted review for the audit and preview.
 				if r.CompletedCycles>=r.MaxCycles {r.State="paused";r.Enabled=false} else {r.State="idle"}
 				r.UpdatedAt=time.Now()
 				internal.AddEvent(st,"relay-delivered",id,"Codex 응답 전달 완료")
