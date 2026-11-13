@@ -105,6 +105,7 @@ func (r *RelayWindow) requestModels() {
 	r.modelsLoading=true
 	r.modelError=""
 	r.modelMu.Unlock()
+	r.displayModels=nil // A loading placeholder is never a valid model selection.
 	h:=r.ctl(relayModel)
 	send(h,cbResetContent,0,0)
 	addComboString(h,"계정 모델 목록 조회 중…")
