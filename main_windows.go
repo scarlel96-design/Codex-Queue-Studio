@@ -219,9 +219,9 @@ func signed(v int32) uintptr    { return uintptr(uint64(int64(v))) }
 func rgb(r, g, b uint32) uint32 { return r | (g << 8) | (b << 16) }
 func palette(dark bool) Palette {
 	if dark {
-		return Palette{rgb(14, 18, 27), rgb(21, 26, 38), rgb(30, 37, 51), rgb(25, 32, 45), rgb(242, 246, 252), rgb(151, 165, 187), rgb(67, 129, 233), rgb(255, 255, 255), rgb(53, 64, 82)}
+		return Palette{rgb(14, 17, 24), rgb(22, 26, 35), rgb(32, 37, 47), rgb(41, 47, 59), rgb(244, 246, 250), rgb(167, 177, 194), rgb(91, 157, 248), rgb(255, 255, 255), rgb(61, 69, 86)}
 	}
-	return Palette{rgb(246, 248, 252), rgb(239, 243, 250), rgb(255, 255, 255), rgb(250, 251, 254), rgb(27, 41, 63), rgb(108, 122, 146), rgb(43, 109, 216), rgb(255, 255, 255), rgb(220, 227, 238)}
+	return Palette{rgb(246, 247, 250), rgb(237, 240, 246), rgb(255, 255, 255), rgb(247, 249, 252), rgb(34, 43, 59), rgb(110, 122, 144), rgb(33, 103, 213), rgb(255, 255, 255), rgb(222, 228, 238)}
 }
 
 var u32 = syscall.NewLazyDLL("user32.dll")
@@ -828,8 +828,10 @@ func (g *GUI) draw(hdc uintptr) {
 	p := g.pal
 	fill(hdc, RECT{0, 0, g.W, g.H}, p.bg)
 	fill(hdc, RECT{0, 0, 208, g.H}, p.side)
+	fill(hdc,RECT{207,0,208,g.H},p.border)
 	fill(hdc, RECT{17, 101, 189, 102}, p.border)
 	roundBox(hdc, RECT{16, g.H - 166, 191, g.H - 152}, p.border)
+	roundBox(hdc, RECT{19, 26, 58, 66}, p.border)
 	roundBox(hdc, RECT{20, 24, 56, 59}, p.accent)
 	drawText(hdc, "C", RECT{22, 23, 54, 60}, p.accentText, g.bold, DT_CENTER|DT_VCENTER|DT_SINGLELINE)
 	drawText(hdc, "Codex Queue", RECT{67, 27, 204, 58}, p.text, g.font, DT_SINGLELINE|DT_VCENTER)
@@ -860,6 +862,8 @@ func (g *GUI) draw(hdc uintptr) {
 		}
 		xr := x + left + 18
 		right := area - left - 18
+		roundBox(hdc,RECT{x-5,213,x+left+7,g.H-33},p.border)
+		roundBox(hdc,RECT{xr-5,213,xr+right+7,g.H-33},p.border)
 		roundBox(hdc,RECT{x-6,210,x+left+6,g.H-36},p.card)
 		roundBox(hdc,RECT{xr-6,210,xr+right+6,g.H-36},p.card)
 		g.drawExplorerTabs(hdc)
@@ -894,6 +898,11 @@ func (g *GUI) drawButton(dis *DRAWITEMSTRUCT) {
 	if selected {
 		bg = p.field
 		fg = p.accent
+	}
+	if id==ID_TAB_CODEX||id==ID_TAB_GPT {
+		bg=p.field
+		fg=p.muted
+		if selected {bg=p.card;fg=p.accent}
 	}
 	if id == ID_EXIT {
 		bg = p.side
