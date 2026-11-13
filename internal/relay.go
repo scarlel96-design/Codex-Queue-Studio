@@ -1,6 +1,7 @@
 package internal
 
 import (
+	"bufio"
 	"bytes"
 	"context"
 	"encoding/json"
@@ -43,20 +44,41 @@ type Completion struct {
 // A task_complete event is required. Empty messages are not a valid handoff.
 func LatestCompletion(path string) (Completion,error) {
 	var result Completion
-	err:=scanJSONLines(path,128<<20,250000,func(line []byte) bool {
-		var event rolloutEvent
-		if json.Unmarshal(line,&event)!=nil || event.Type!="event_msg" {return true}
-		var payload struct {
-			Type string `json:"type"`
-			TurnID string `json:"turn_id"`
-			LastMessage *string `json:"last_agent_message"`
+	f,err:=os.Open(path)
+	if err!=nil{return result,err}
+	defer f.Close()
+	st,err:=f.Stat()
+	if err!=nil{return result,err}
+	// Reading the tail avoids scanning tens of thousands of prior turns on every poll.
+	// A completion outside the tail is intentionally not replayed.
+	const tailBytes int64=16<<20
+	offset:=st.Size()-tailBytes
+	if offset<0 {offset=0}
+	if _,err=f.Seek(offset,io.SeekStart);err!=nil{return result,err}
+	reader:=bufio.NewReaderSize(io.LimitReader(f,tailBytes+1024),64<<10)
+	if offset>0 {
+		_,err=reader.ReadBytes('\n')
+		if err!=nil && err!=io.EOF{return result,err}
+	}
+	for i:=0;i<60000;i++ {
+		line,readErr:=reader.ReadBytes('\n')
+		if len(line)>0 {
+			var event rolloutEvent
+			if json.Unmarshal(line,&event)==nil && event.Type=="event_msg" {
+				var payload struct {
+					Type string `json:"type"`
+					TurnID string `json:"turn_id"`
+					LastMessage *string `json:"last_agent_message"`
+				}
+				if json.Unmarshal(event.Payload,&payload)==nil && payload.Type=="task_complete" && payload.TurnID!="" && payload.LastMessage!=nil && strings.TrimSpace(*payload.LastMessage)!="" {
+					result=Completion{TurnID:payload.TurnID,Message:strings.TrimSpace(*payload.LastMessage),Timestamp:event.Timestamp}
+				}
+			}
 		}
-		if json.Unmarshal(event.Payload,&payload)!=nil || payload.Type!="task_complete" {return true}
-		if payload.TurnID=="" || payload.LastMessage==nil || strings.TrimSpace(*payload.LastMessage)=="" {return true}
-		result=Completion{TurnID:payload.TurnID,Message:strings.TrimSpace(*payload.LastMessage),Timestamp:event.Timestamp}
-		return true
-	})
-	return result,err
+		if readErr==io.EOF{break}
+		if readErr!=nil{return result,readErr}
+	}
+	return result,nil
 }
 
 // ResponsesClient uses API conversations owned by this application.
